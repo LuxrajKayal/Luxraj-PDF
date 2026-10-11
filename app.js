@@ -22,7 +22,7 @@ const els = {
 };
 
 const state = {
-  bytes: null, pdf: null, fileName: '', pages: [], annotations: [], selectedId: null,
+  bytes: null, pdf: null, renderMode: 'pdfjs', fileName: '', pages: [], annotations: [], selectedId: null,
   tool: 'select', color: '#2563eb', thickness: 3, fill: false,
   history: new AnnotationHistory(60), nextId: 1, interaction: null, toastTimer: null
 };
