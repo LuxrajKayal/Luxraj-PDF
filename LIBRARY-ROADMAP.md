@@ -1,42 +1,52 @@
-# Luxraj PDF Library — Development Roadmap
+# Luxraj PDF Engine — Development Roadmap
 
-This document describes planned first-party components. Only the annotation core in v0.1 is implemented and tested today; future components are not claimed as complete.
+The first-party engine is built incrementally and tested independently. A feature is not considered a replacement for a third-party library until it works against a representative set of real PDFs.
 
-## v0.1 — Annotation Core (implemented)
+## v0.1 — Annotation core (implemented)
 
 File: `luxraj-annotation-core.js`
 
-- Annotation creation and color validation
-- Geometry, bounds, and hit-testing
-- Canvas drawing for pen, highlight, rectangle, ellipse, line, arrow, and text
-- Moving annotations
-- Bounded undo/redo history
-- JSON serialization and validation for annotation state
+- Annotation models, validation, geometry, hit-testing, and canvas drawing
+- Moving annotations and bounded undo/redo history
+- Annotation-state JSON serialization and validation
 - No third-party runtime dependencies
 
-## v0.2 — PDF byte/object foundation (planned)
+## v0.2 — PDF syntax and minimal writer (implemented foundation)
 
-Create a separate first-party module for byte handling, PDF tokens, literal strings, dictionaries, arrays, indirect references, and object serialization. Add tests with small handcrafted fixtures before attempting broader files.
+File: `luxraj-pdf-engine.js`
 
-## v0.3 — Minimal PDF writer (planned)
+- First-party PDF name, reference, literal-string, and hex-string value types
+- Serializer for common PDF values: names, numbers, booleans, null, arrays, dictionaries, strings, and indirect references
+- Parser for those value types, including escaped strings, hex strings, comments, and nested arrays/dictionaries
+- Creates new, simple PDF files from caller-supplied page sizes and content-stream operators
+- Unit tests verify serialization, parsing errors, content stream lengths, and classic cross-reference offsets
 
-Generate valid PDFs for newly created pages with vector annotations and text using a deliberately limited feature set. This first writer will not automatically preserve arbitrary existing PDF files.
+Limitations: this is not yet a full PDF document parser. It does not open arbitrary PDFs, resolve cross-reference/object streams, decode image/font data, handle encryption, or preserve an existing PDF's page content.
 
-## v0.4 — PDF parser and source preservation (planned)
+## v0.3 — Annotation content generator (next)
 
-Implement indirect-object parsing, cross-reference/trailer handling, and supported stream filters. Unknown filters, encrypted files, object streams, unusual font encodings, and malformed files must fail safely rather than produce corrupted output.
+Convert our own annotation model into standard PDF graphics operators and create new PDFs containing those annotations. Validate output with independent PDF readers.
 
-## v0.5 — PDF page renderer (planned)
+## v0.4 — Existing-file object reader
 
-Implement a tested subset of PDF drawing and text operators. General PDF rendering is extensive: image decoding, transparency, fonts, text encodings, page transforms, clipping, and many graphics operators require separate work.
+Implement file headers, indirect objects, classic cross-reference tables, trailers, object references, page-tree traversal, and supported stream filters. Reject unsupported or encrypted documents safely.
 
-## v1.0 — Reduce and then remove external PDF dependencies (future target)
+## v0.5 — Source-preserving writer
 
-Only after the internal reader, renderer, and writer pass fixture-based validation across a range of real PDFs should the application stop relying on PDF.js and pdf-lib. Until then, the app uses those separately licensed libraries for PDF reading/rendering/writing. Their notices remain in `THIRD-PARTY-NOTICES.md`.
+Update supported page dictionaries and content streams while retaining existing objects. Validate cross-reference offsets and ensure unmodified source page content remains intact. Add fixtures for common real-world PDFs before using it in the browser app.
 
-## Quality requirements
+## v0.6 — Page renderer
 
-- Every feature must have automated tests.
-- Keep PDF fixtures small, redistributable, and locally generated where possible.
-- Never claim general PDF compatibility until it has been tested.
-- Keep the first-party modules separate from the user interface so they can be tested and reused independently.
+Implement a tested PDF drawing-operator subset and build up text, paths, images, fonts, transparency, transforms, and clipping. The renderer must be compared with trusted readers using a fixture corpus.
+
+## v1.0 — Remove external PDF-engine dependencies
+
+Only after our own reader, renderer, and writer pass fixture-based validation should the browser app stop loading PDF.js and pdf-lib. Until that happens, the app uses those separately licensed libraries for the current full document workflow; their notices must remain accurate.
+
+## Quality and ownership rules
+
+- Write first-party code independently; do not copy implementation code from PDF.js or pdf-lib.
+- Keep the PDF engine separate from the browser UI.
+- Add automated tests for each supported feature.
+- Test output with multiple independent PDF readers where possible.
+- Never claim general compatibility when only a limited subset is supported.
