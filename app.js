@@ -281,7 +281,7 @@ async function exportPdf() {
         const p = ann.points || [];
         if (ann.type === 'text') {
           const point = toPdfPoint(pageView, p[0]);
-          page.drawText(ann.text || '', { x: point.x, y: point.y, size: ann.fontSize || 18, font, color, opacity: 1 });
+          page.drawText(ann.text || '', { x: point.x, y: point.y, size: (ann.fontSize || 18) / sy, font, color, opacity: 1 });
         } else if ((ann.type === 'pen' || ann.type === 'highlight') && p.length > 1) {
           const thickness = ann.type === 'highlight' ? Math.max(12, ann.thickness * 4) / sx : ann.thickness / sx;
           for (let i = 1; i < p.length; i += 1) {
