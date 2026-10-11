@@ -268,6 +268,49 @@ test('incremental export avoids overwriting a same-named font resource already i
   assert.ok(addedContent.includes('BT /LuxrajText1 20 Tf 100 50 Td (Added) Tj ET'));
 });
 
+
+test('encodes common Windows-1252 text in first-party text annotations', () => {
+  const content = annotationsToPdfContent([
+    {
+      id: 20, type: 'text', pageIndex: 0, color: '#000000', thickness: 1,
+      fontSize: 12, text: 'Café € —', points: [{ x: 10, y: 15 }],
+    },
+  ], { pageWidth: 100, pageHeight: 100 });
+  assert.ok(content.includes(String.raw`(Caf\351 \200 \227)`));
+  assert.throws(() => annotationsToPdfContent([
+    { type: 'text', pageIndex: 0, text: 'こんにちは', points: [{ x: 0, y: 0 }] },
+  ], { pageWidth: 100, pageHeight: 100 }), /Windows-1252 text only/);
+});
+
+test('incremental writer applies real opacity with ExtGState and preserves existing graphics states', () => {
+  const original = createPdf({
+    pages: [{
+      width: 100, height: 100, content: '',
+      resources: { ExtGState: { Existing: { Type: pdfName('ExtGState'), ca: 0.8, CA: 0.8 } } },
+    }],
+  });
+  const updated = addAnnotationsToPdf(original, [
+    { id: 21, type: 'highlight', pageIndex: 0, color: '#ff0000', opacity: 0.33, thickness: 4, points: [{ x: 10, y: 10 }, { x: 30, y: 30 }] },
+    { id: 22, type: 'line', pageIndex: 0, color: '#0000ff', opacity: 0.5, thickness: 2, points: [{ x: 15, y: 20 }, { x: 35, y: 40 }] },
+    { id: 23, type: 'text', pageIndex: 0, color: '#000000', opacity: 1, thickness: 1, fontSize: 12, text: 'Café € —', points: [{ x: 5, y: 12 }] },
+  ], { pageMetrics: [{ canvasWidth: 100, canvasHeight: 100 }] });
+
+  const document = parsePdfDocument(updated);
+  const page = document.pages[0];
+  const states = page.resources.ExtGState;
+  assert.ok(states.Existing);
+  const alpha33 = document.objects.get(states.LuxrajAlpha330.objectNumber).value;
+  const alpha50 = document.objects.get(states.LuxrajAlpha500.objectNumber).value;
+  assert.equal(alpha33.ca, 0.33);
+  assert.equal(alpha33.CA, 0.33);
+  assert.equal(alpha50.ca, 0.5);
+  assert.equal(alpha50.CA, 0.5);
+  const outputContent = binaryText(page.contentStreams.at(-1));
+  assert.ok(outputContent.includes('/LuxrajAlpha330 gs'));
+  assert.ok(outputContent.includes('/LuxrajAlpha500 gs'));
+  assert.ok(outputContent.includes(String.raw`(Caf\351 \200 \227)`));
+});
+
 test('first-party incremental writer returns original bytes if no annotations are supplied', () => {
   const original = createPdf({ pages: [{ width: 100, height: 100, content: '' }] });
   assert.deepEqual(addAnnotationsToPdf(original, []), original);
