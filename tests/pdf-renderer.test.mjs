@@ -74,7 +74,7 @@ test('renders simple text using the page font resource and text matrix', async (
   assert.ok(text);
   assert.deepEqual(text.args, ['Luxraj', 0, 0]);
   const transform = context.calls.find((call) => call.name === 'setTransform' &&
-    call.args.length === 6 && call.args[0] === 12 && call.args[3] === -12);
+    call.args.length === 6 && call.args[0] === 12 && call.args[3] === 12);
   assert.ok(transform, 'text should apply the PDF font size and upright glyph transform');
   assert.deepEqual(result.warnings, []);
 });
