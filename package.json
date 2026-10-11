@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "version": "0.1.0",
-  "description": "Luxraj Editor and first-party annotation core",
+  "description": "Luxraj Editor with a first-party PDF engine and annotation exporter",
   "scripts": {
     "test": "node --test"
   }
