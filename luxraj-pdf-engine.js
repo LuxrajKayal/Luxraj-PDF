@@ -302,7 +302,7 @@ function positivePageNumber(value, label) {
  * Write a small, new PDF from page boxes and raw PDF content-stream operators.
  * This does not yet parse or preserve arbitrary input PDFs.
  *
- * Each page: { width: number, height: number, content?: string | Uint8Array }
+ * Each page: { width: number, height: number, content?: string | Uint8Array, resources?: PDF dictionary }
  * Content streams contain PDF graphics/text operators authored by the caller.
  */
 export function createPdf({ pages = [] } = {}) {
@@ -334,7 +334,7 @@ export function createPdf({ pages = [] } = {}) {
       Type: pdfName('Page'),
       Parent: pdfRef(2),
       MediaBox: [0, 0, width, height],
-      Resources: { Font: { F1: pdfRef(3) } },
+      Resources: page.resources ?? { Font: { F1: pdfRef(3) } },
       Contents: pdfRef(contentObjectId)
     });
     addRawObject(toBytes(pageBody));
@@ -417,6 +417,10 @@ export function annotationsToPdfContent(annotations, options = {}) {
     scaleX: pageWidth / canvasWidth,
     scaleY: pageHeight / canvasHeight,
   };
+  const fontResourceName = options.fontResourceName ?? 'F1';
+  if (typeof fontResourceName !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]*$/.test(fontResourceName)) {
+    throw new TypeError('fontResourceName must be a simple PDF resource name.');
+  }
   const commands = [];
 
   for (const annotation of annotations) {
@@ -481,8 +485,9 @@ export function annotationsToPdfContent(annotations, options = {}) {
       }
     } else if (annotation.type === 'text') {
       const point = contentPoint(points[0], context);
-      const size = positivePageNumber(Number(annotation.fontSize ?? 18), 'Font size');
-      commands.push(`BT /F1 ${formatNumber(size)} Tf ${formatNumber(point.x)} ${formatNumber(point.y)} Td ${pdfTextLiteral(annotation.text ?? '')} Tj ET`);
+      // fontSize is measured in annotation-canvas pixels; the PDF text matrix uses PDF user-space units.
+      const size = positivePageNumber(Number(annotation.fontSize ?? 18) * context.scaleY, 'Font size');
+      commands.push(`BT /${fontResourceName} ${formatNumber(size)} Tf ${formatNumber(point.x)} ${formatNumber(point.y)} Td ${pdfTextLiteral(annotation.text ?? '')} Tj ET`);
     }
     commands.push('Q');
   }
@@ -791,6 +796,51 @@ export function addAnnotationsToPdf(input, annotations, { pageMetrics = [] } = {
   const additions = [];
   const modifiedPages = [];
 
+  const textPages = document.pages.filter((page, pageIndex) =>
+    annotations.some((annotation) =>
+      annotation.pageIndex === pageIndex &&
+      annotation.type === 'text' &&
+      Array.isArray(annotation.points) &&
+      annotation.points.length > 0
+    )
+  );
+
+  const fontDictionaryForPage = (page) => {
+    const resources = page.resources;
+    if (resources === null || resources === undefined) return {};
+    if (!resources || typeof resources !== 'object' || Array.isArray(resources)) {
+      throw new SyntaxError('Page resources must be a dictionary before adding text.');
+    }
+    if (resources.Font === null || resources.Font === undefined) return {};
+    const fonts = resolvePdfValue(resources.Font, document.objects);
+    if (!fonts || typeof fonts !== 'object' || Array.isArray(fonts)) {
+      throw new SyntaxError('Page font resources must be a dictionary before adding text.');
+    }
+    return fonts;
+  };
+
+  let textFontResourceName = 'LuxrajText';
+  let resourceSuffix = 1;
+  while (textPages.some((page) => Object.hasOwn(fontDictionaryForPage(page), textFontResourceName))) {
+    textFontResourceName = `LuxrajText${resourceSuffix++}`;
+  }
+
+  let textFontReference = null;
+  if (textPages.length > 0) {
+    const fontObjectNumber = nextObjectNumber++;
+    textFontReference = pdfRef(fontObjectNumber);
+    additions.push({
+      objectNumber: fontObjectNumber,
+      generation: 0,
+      body: toBytes(serializePdfValue({
+        Type: pdfName('Font'),
+        Subtype: pdfName('Type1'),
+        BaseFont: pdfName('Helvetica'),
+        Encoding: pdfName('WinAnsiEncoding'),
+      })),
+    });
+  }
+
   for (let pageIndex = 0; pageIndex < document.pages.length; pageIndex += 1) {
     const page = document.pages[pageIndex];
     if (!annotations.some((annotation) => annotation.pageIndex === pageIndex)) continue;
@@ -805,6 +855,7 @@ export function addAnnotationsToPdf(input, annotations, { pageMetrics = [] } = {
       pageHeight: page.height,
       canvasWidth,
       canvasHeight,
+      fontResourceName: textFontResourceName,
     });
     if (!operators) continue;
 
@@ -834,6 +885,21 @@ export function addAnnotationsToPdf(input, annotations, { pageMetrics = [] } = {
     }
 
     const updatedDictionary = { ...page.dictionary, Contents: nextContents };
+    const pageHasText = annotations.some((annotation) =>
+      annotation.pageIndex === pageIndex &&
+      annotation.type === 'text' &&
+      Array.isArray(annotation.points) &&
+      annotation.points.length > 0
+    );
+    if (pageHasText) {
+      if (!textFontReference) throw new SyntaxError('Text font object was not prepared for this page.');
+      const existingResources = page.resources ?? {};
+      const existingFonts = fontDictionaryForPage(page);
+      updatedDictionary.Resources = {
+        ...existingResources,
+        Font: { ...existingFonts, [textFontResourceName]: textFontReference },
+      };
+    }
     const pageRecord = document.objects.get(page.object);
     if (!pageRecord) throw new SyntaxError(`Cannot find the page object ${page.object}.`);
     modifiedPages.push({
