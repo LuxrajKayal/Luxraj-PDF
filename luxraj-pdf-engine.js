@@ -366,10 +366,11 @@ export function createPdf({ pages = [] } = {}) {
 
 
 function pdfRgb(hex, pale = false) {
-  if (typeof hex !== 'string' || !/^#?(?:[\\da-f]{3}|[\\da-f]{6})$/i.test(hex.trim())) {
+  const input = typeof hex === 'string' ? hex.trim().replace(/^#/, '') : '';
+  if (!/^(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(input)) {
     throw new TypeError('Annotation color must be a 3- or 6-digit hex value.');
   }
-  let raw = hex.trim().replace(/^#/, '');
+  let raw = input;
   if (raw.length === 3) raw = [...raw].map((char) => char + char).join('');
   const channels = [0, 2, 4].map((offset) => parseInt(raw.slice(offset, offset + 2), 16) / 255);
   const values = pale ? channels.map((channel) => channel * 0.22 + 0.78) : channels;
@@ -424,7 +425,7 @@ export function annotationsToPdfContent(annotations, options = {}) {
     const highlight = annotation.type === 'highlight';
     const strokeColor = pdfRgb(annotation.color ?? '#2563eb', highlight);
     const fillColor = pdfRgb(annotation.color ?? '#2563eb', highlight);
-    commands.push('q', `${strokeColor} RG`, `${fillColor} rg`, `${formatNumber(lineWidth * (highlight ? 4 : 1))} w`, '1 J', '1 j');
+    commands.push('q', `${strokeColor} RG`, `${fillColor} rg`, `${formatNumber(highlight ? Math.max(12, Number(annotation.thickness ?? 1) * 4) * (context.scaleX + context.scaleY) / 2 : lineWidth)} w`, '1 J', '1 j');
 
     if (annotation.type === 'pen' || highlight) {
       if (points.length > 1) {
