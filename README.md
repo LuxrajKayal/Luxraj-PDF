@@ -8,7 +8,7 @@ The repository also contains `luxraj-pdf-engine.js`, an independently written PD
 
 ## Run locally
 
-The app uses JavaScript modules and currently loads PDF.js and pdf-lib from public CDNs. Serve the folder with a local web server:
+The app uses JavaScript modules. PDF.js currently loads from a public CDN for viewing; pdf-lib is dynamically loaded only if the compatibility export fallback is needed. Serve the folder with a local web server:
 
 ```bash
 python3 -m http.server 8000
@@ -18,7 +18,7 @@ Then open `http://localhost:8000` in your browser.
 
 ## Privacy
 
-PDF files are processed in the browser. The application does not intentionally upload your document to a Luxraj server. PDF.js and the temporary pdf-lib fallback are loaded from public CDNs. The first-party annotation core and PDF-engine modules run locally and have no third-party runtime dependencies.
+PDF files are processed in the browser. The application does not intentionally upload your document to a Luxraj server. PDF.js loads from a public CDN. The temporary pdf-lib fallback is dynamically loaded only when needed. The first-party annotation core and PDF-engine modules run locally and have no third-party runtime dependencies.
 
 ## First-party PDF-engine scope
 
@@ -36,7 +36,7 @@ Not implemented yet: xref streams, compressed object streams, indirect stream le
 
 ## Current app scope
 
-The current app still relies on PDF.js to render pages. The export button tries the first-party incremental writer when the source PDF structure and page dimensions are supported. Unsupported PDFs—including files with structures the current engine cannot parse, rotated pages, and unsupported annotation text—use pdf-lib as a temporary compatibility fallback. Removing these libraries safely requires completing and testing the reader, renderer, and writer across a corpus of real PDFs.
+The current app still relies on PDF.js to render pages. The export button tries the first-party incremental writer when the source PDF structure and page dimensions are supported. Unsupported PDFs—including files with structures the current engine cannot parse, rotated pages, and unsupported annotation text—use pdf-lib as a temporary compatibility fallback, dynamically loaded only when required. Removing these libraries safely requires completing and testing the reader, renderer, and writer across a corpus of real PDFs.
 
 ## First-party annotation core
 
