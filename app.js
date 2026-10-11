@@ -1,4 +1,3 @@
-import { PDFDocument, rgb, StandardFonts } from 'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/+esm';
 import { addAnnotationsToPdf, parsePdfDocument } from './luxraj-pdf-engine.js';
 import {
   AnnotationHistory, cloneAnnotationList as cloneAnnotations, createAnnotation,
@@ -65,12 +64,12 @@ function setTool(tool) {
   document.querySelectorAll('.page-ink').forEach(canvas => canvas.style.cursor = tool === 'select' ? 'default' : tool === 'text' ? 'text' : tool === 'eraser' ? 'cell' : 'crosshair');
 }
 
-function hexToRgb(hex) {
+function hexToRgb(hex, rgbFactory) {
   const value = (hex || '#000000').replace('#', '');
   const full = value.length === 3 ? value.split('').map(ch => ch + ch).join('') : value;
   const num = Number.parseInt(full, 16);
-  if (!Number.isFinite(num)) return rgb(0, 0, 0);
-  return rgb(((num >> 16) & 255) / 255, ((num >> 8) & 255) / 255, (num & 255) / 255);
+  if (!Number.isFinite(num)) return rgbFactory(0, 0, 0);
+  return rgbFactory(((num >> 16) & 255) / 255, ((num >> 8) & 255) / 255, (num & 255) / 255);
 }
 
 function normalizeColor(value) {
@@ -232,7 +231,7 @@ function toPdfPoint(page, point) {
   const scaleX = page.width / page.pdfWidth, scaleY = page.height / page.pdfHeight;
   return { x: point.x / scaleX, y: page.pdfHeight - point.y / scaleY };
 }
-function toPdfColor(hex) { return hexToRgb(hex); }
+function toPdfColor(hex, rgbFactory) { return hexToRgb(hex, rgbFactory); }
 async function exportPdf() {
   if (!state.bytes || !state.annotations.length) {
     notify(state.annotations.length ? 'Open a PDF before exporting.' : 'Add an annotation before exporting.');
@@ -270,12 +269,13 @@ async function exportPdf() {
     } catch (firstPartyError) {
       console.info('Using temporary PDF compatibility fallback:', firstPartyError.message);
       exportMethod = 'compatibility';
+      const { PDFDocument, rgb, StandardFonts } = await import('https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/+esm');
       const document = await PDFDocument.load(state.bytes.slice());
       const font = await document.embedFont(StandardFonts.Helvetica);
       for (const ann of state.annotations) {
         const page = document.getPage(ann.pageIndex);
         const pageView = state.pages[ann.pageIndex];
-        const color = toPdfColor(ann.color);
+        const color = toPdfColor(ann.color, rgb);
         const sx = pageView.width / pageView.pdfWidth;
         const sy = pageView.height / pageView.pdfHeight;
         const p = ann.points || [];
