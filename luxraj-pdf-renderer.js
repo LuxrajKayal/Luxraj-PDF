@@ -682,7 +682,8 @@ function drawPdfText(state, rawText) {
   state.textMatrix = multiplyMatrix(state.textMatrix, [1, 0, 0, 1, textAdvance(state, text), 0]);
 }
 
-function evaluatePdfFunction(fn, input) {
+function evaluatePdfFunction(fn, input, document = null) {
+  if (fn instanceof PdfReference) fn = resolveValue(document, fn);
   const type = fn?.FunctionType;
   const domain = Array.isArray(fn?.Domain) ? fn.Domain : [0, 1];
   if (type === 2) {
@@ -703,19 +704,20 @@ function evaluatePdfFunction(fn, input) {
     const start = boundaries[segment], end = boundaries[segment + 1];
     const e0 = encode[segment * 2] ?? 0, e1 = encode[segment * 2 + 1] ?? 1;
     const local = (input - start) / Math.max(1e-9, end - start);
-    return evaluatePdfFunction(fn.Functions[segment], e0 + local * (e1 - e0));
+    return evaluatePdfFunction(fn.Functions[segment], e0 + local * (e1 - e0), document);
   }
   throw new Error('This PDF shading function type is not supported.');
 }
 
-function shadingColor(values, colorSpace) {
+function shadingColor(values, colorSpace, document) {
+  colorSpace = resolveValue(document, colorSpace);
   if (colorSpace instanceof PdfName) {
     if (colorSpace.value === 'DeviceGray' || colorSpace.value === 'G') return colorGray(values[0] ?? 0);
     if (colorSpace.value === 'DeviceCMYK' || colorSpace.value === 'CMYK') return colorCmyk(values);
     if (colorSpace.value === 'DeviceRGB' || colorSpace.value === 'RGB') return colorRgb(values);
   }
   if (Array.isArray(colorSpace) && colorSpace[0] instanceof PdfName && colorSpace[0].value === 'ICCBased') {
-    const profile = resolveValueForColorSpaceProfile(colorSpace[1]);
+    const profile = resolveValue(document, colorSpace[1]);
     const components = Number(profile?.N);
     if (components === 1) return colorGray(values[0] ?? 0);
     if (components === 4) return colorCmyk(values);
@@ -724,19 +726,15 @@ function shadingColor(values, colorSpace) {
   return colorRgb(values);
 }
 
-function resolveValueForColorSpaceProfile(profile) {
-  return profile && typeof profile === 'object' ? profile : null;
-}
-
-function makeShadingStops(shading) {
-  const fn = shading.Function;
+function makeShadingStops(shading, document) {
+  const fn = resolveValue(document, shading.Function);
   const domain = Array.isArray(fn?.Domain) ? fn.Domain : [0, 1];
   const stops = [];
   const count = fn?.FunctionType === 3 ? Math.max(12, fn.Functions.length * 8) : 20;
   for (let index = 0; index <= count; index += 1) {
     const fraction = index / count;
     const input = domain[0] + fraction * (domain[1] - domain[0]);
-    stops.push({ offset: fraction, values: evaluatePdfFunction(fn, input) });
+    stops.push({ offset: fraction, values: evaluatePdfFunction(fn, input, document) });
   }
   return stops;
 }
@@ -748,8 +746,8 @@ function createShadingPattern(state, name) {
   const pattern = patternTable && typeof patternTable === 'object' ? resolveValue(state.document, patternTable[name]) : null;
   if (!pattern || pattern.PatternType !== 2 || !pattern.Shading || typeof pattern.Shading !== 'object') return null;
 
-  const shading = pattern.Shading;
-  const shadingType = Number(shading.ShadingType);
+  const shading = resolveValue(state.document, pattern.Shading);
+  const shadingType = Number(shading?.ShadingType);
   const coords = shading.Coords;
   if (!Array.isArray(coords) || (shadingType !== 2 && shadingType !== 3)) return null;
 
@@ -767,11 +765,11 @@ function createShadingPattern(state, name) {
   }
   context.restore();
 
-  const stops = makeShadingStops(shading);
+  const stops = makeShadingStops(shading, state.document);
   const colorSpace = shading.ColorSpace;
   for (const stop of stops) {
     const offset = Math.max(0, Math.min(1, stop.offset));
-    const color = shadingColor(stop.values, colorSpace);
+    const color = shadingColor(stop.values, colorSpace, state.document);
     try { gradient.addColorStop(offset, color); } catch { /* repeated positions are ignored */ }
   }
   return gradient;
