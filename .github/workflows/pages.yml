@@ -31,7 +31,8 @@ jobs:
         run: |
           node --check app.js
           node --check luxraj-annotation-core.js
-      - name: Test first-party annotation library
+          node --check luxraj-pdf-engine.js
+      - name: Test first-party libraries
         run: npm test
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
