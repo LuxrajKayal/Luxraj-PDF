@@ -131,14 +131,14 @@ test('creates annotation-only PDF files with content and validates unsupported U
   ), /Windows-1252 text only/);
 });
 
-test('reads page boxes and directly sized content streams from a classic-xref PDF', () => {
+test('reads page boxes and directly sized content streams from a classic-xref PDF', async () => {
   const sourceBytes = createPdf({
     pages: [
       { width: 200, height: 100, content: 'q 1 0 0 rg 10 10 30 20 re f Q' },
       { width: 612, height: 792, content: 'BT /F1 12 Tf 20 700 Td (Second) Tj ET' },
     ],
   });
-  const document = parsePdfDocument(sourceBytes);
+  const document = await parsePdfDocument(sourceBytes);
   assert.equal(document.version, '1.4');
   assert.equal(document.pages.length, 2);
   assert.deepEqual([document.pages[0].width, document.pages[0].height], [200, 100]);
@@ -148,23 +148,23 @@ test('reads page boxes and directly sized content streams from a classic-xref PD
   assert.equal(document.pages[0].object, 4);
 });
 
-test('rejects unsupported xref-stream PDFs and invalid document data clearly', () => {
-  assert.throws(() => parsePdfDocument(new Uint8Array([1, 2, 3])), /recognizable PDF header/);
+test('rejects unsupported xref-stream PDFs and invalid document data clearly', async () => {
+  await assert.rejects(() => parsePdfDocument(new Uint8Array([1, 2, 3])), /recognizable PDF header/);
   const xrefStream = new TextEncoder().encode('%PDF-1.5\n1 0 obj << /Type /XRef >>\nstartxref\n10\n%%EOF');
-  assert.throws(() => parsePdfDocument(xrefStream), /xref offset|xref stream/i);
+  await assert.rejects(() => parsePdfDocument(xrefStream), /xref offset|xref stream/i);
 });
 
-test('appends annotations while isolating their graphics state from the original page streams', () => {
+test('appends annotations while isolating their graphics state from the original page streams', async () => {
   const original = createPdf({
     pages: [{ width: 200, height: 100, content: 'q 0.2 0.3 0.4 rg 5 5 40 30 re f Q' }],
   });
-  const before = parsePdfDocument(original);
-  const updatedBytes = addAnnotationsToPdf(original, [
+  const before = await parsePdfDocument(original);
+  const updatedBytes = await addAnnotationsToPdf(original, [
     { id: 1, type: 'rect', pageIndex: 0, color: '#ff0000', thickness: 2, fill: false, points: [{ x: 10, y: 10 }, { x: 30, y: 30 }] },
   ], { pageMetrics: [{ canvasWidth: 200, canvasHeight: 100 }] });
 
   assert.deepEqual(updatedBytes.slice(0, original.length), original);
-  const after = parsePdfDocument(updatedBytes);
+  const after = await parsePdfDocument(updatedBytes);
   assert.equal(after.pages.length, 1);
   assert.equal(after.pages[0].contentStreams.length, 4);
   assert.equal(binaryText(after.pages[0].contentStreams[0]), 'q\n');
@@ -175,17 +175,17 @@ test('appends annotations while isolating their graphics state from the original
   assert.ok(after.startXref > before.startXref);
 });
 
-test('wraps unbalanced source-page transforms so exported marks use page coordinates', () => {
+test('wraps unbalanced source-page transforms so exported marks use page coordinates', async () => {
   // Chromium-generated PDFs can leave a page-wide CTM active outside a q/Q pair.
   const originalContent = '.24 0 0 -.24 0 100 cm\nq 1 0 0 rg 10 10 20 20 re f Q';
   const original = createPdf({
     pages: [{ width: 200, height: 100, content: originalContent }],
   });
-  const updatedBytes = addAnnotationsToPdf(original, [
+  const updatedBytes = await addAnnotationsToPdf(original, [
     { id: 2, type: 'line', pageIndex: 0, color: '#2563eb', thickness: 3, points: [{ x: 100, y: 25 }, { x: 150, y: 75 }] },
   ], { pageMetrics: [{ canvasWidth: 200, canvasHeight: 100 }] });
 
-  const after = parsePdfDocument(updatedBytes);
+  const after = await parsePdfDocument(updatedBytes);
   assert.equal(after.pages[0].contentStreams.length, 4);
   assert.equal(binaryText(after.pages[0].contentStreams[0]), 'q\n');
   assert.equal(binaryText(after.pages[0].contentStreams[1]), originalContent);
@@ -193,7 +193,7 @@ test('wraps unbalanced source-page transforms so exported marks use page coordin
   assert.ok(binaryText(after.pages[0].contentStreams[3]).includes('100 75 m 150 25 l S'));
 });
 
-test('incremental export registers a dedicated Helvetica resource and converts text size and position', () => {
+test('incremental export registers a dedicated Helvetica resource and converts text size and position', async () => {
   const original = createPdf({
     pages: [{
       width: 200,
@@ -202,8 +202,8 @@ test('incremental export registers a dedicated Helvetica resource and converts t
       resources: { ProcSet: [pdfName('PDF')] },
     }],
   });
-  const before = parsePdfDocument(original);
-  const updatedBytes = addAnnotationsToPdf(original, [
+  const before = await parsePdfDocument(original);
+  const updatedBytes = await addAnnotationsToPdf(original, [
     {
       id: 10,
       type: 'text',
@@ -217,7 +217,7 @@ test('incremental export registers a dedicated Helvetica resource and converts t
   ], { pageMetrics: [{ canvasWidth: 100, canvasHeight: 50 }] });
 
   assert.deepEqual(updatedBytes.slice(0, original.length), original);
-  const after = parsePdfDocument(updatedBytes);
+  const after = await parsePdfDocument(updatedBytes);
   const page = after.pages[0];
   assert.deepEqual(page.resources.ProcSet, [pdfName('PDF')]);
 
@@ -238,7 +238,7 @@ test('incremental export registers a dedicated Helvetica resource and converts t
   assert.equal(before.pages.length, after.pages.length);
 });
 
-test('incremental export avoids overwriting a same-named font resource already in the PDF', () => {
+test('incremental export avoids overwriting a same-named font resource already in the PDF', async () => {
   const original = createPdf({
     pages: [{
       width: 200,
@@ -247,7 +247,7 @@ test('incremental export avoids overwriting a same-named font resource already i
       resources: { Font: { LuxrajText: pdfRef(3) } },
     }],
   });
-  const updatedBytes = addAnnotationsToPdf(original, [
+  const updatedBytes = await addAnnotationsToPdf(original, [
     {
       id: 11,
       type: 'text',
@@ -260,7 +260,7 @@ test('incremental export avoids overwriting a same-named font resource already i
     },
   ], { pageMetrics: [{ canvasWidth: 100, canvasHeight: 50 }] });
 
-  const after = parsePdfDocument(updatedBytes);
+  const after = await parsePdfDocument(updatedBytes);
   const fonts = after.pages[0].resources.Font;
   assert.equal(fonts.LuxrajText.objectNumber, 3);
   assert.ok(fonts.LuxrajText1 instanceof PdfReference);
@@ -282,20 +282,20 @@ test('encodes common Windows-1252 text in first-party text annotations', () => {
   ], { pageWidth: 100, pageHeight: 100 }), /Windows-1252 text only/);
 });
 
-test('incremental writer applies real opacity with ExtGState and preserves existing graphics states', () => {
+test('incremental writer applies real opacity with ExtGState and preserves existing graphics states', async () => {
   const original = createPdf({
     pages: [{
       width: 100, height: 100, content: '',
       resources: { ExtGState: { Existing: { Type: pdfName('ExtGState'), ca: 0.8, CA: 0.8 } } },
     }],
   });
-  const updated = addAnnotationsToPdf(original, [
+  const updated = await addAnnotationsToPdf(original, [
     { id: 21, type: 'highlight', pageIndex: 0, color: '#ff0000', opacity: 0.33, thickness: 4, points: [{ x: 10, y: 10 }, { x: 30, y: 30 }] },
     { id: 22, type: 'line', pageIndex: 0, color: '#0000ff', opacity: 0.5, thickness: 2, points: [{ x: 15, y: 20 }, { x: 35, y: 40 }] },
     { id: 23, type: 'text', pageIndex: 0, color: '#000000', opacity: 1, thickness: 1, fontSize: 12, text: 'Café € —', points: [{ x: 5, y: 12 }] },
   ], { pageMetrics: [{ canvasWidth: 100, canvasHeight: 100 }] });
 
-  const document = parsePdfDocument(updated);
+  const document = await parsePdfDocument(updated);
   const page = document.pages[0];
   const states = page.resources.ExtGState;
   assert.ok(states.Existing);
@@ -311,7 +311,7 @@ test('incremental writer applies real opacity with ExtGState and preserves exist
   assert.ok(outputContent.includes(String.raw`(Caf\351 \200 \227)`));
 });
 
-test('first-party incremental writer returns original bytes if no annotations are supplied', () => {
+test('first-party incremental writer returns original bytes if no annotations are supplied', async () => {
   const original = createPdf({ pages: [{ width: 100, height: 100, content: '' }] });
-  assert.deepEqual(addAnnotationsToPdf(original, []), original);
+  assert.deepEqual(await addAnnotationsToPdf(original, []), original);
 });
