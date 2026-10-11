@@ -334,7 +334,7 @@ export function createPdf({ pages = [] } = {}) {
       Type: pdfName('Page'),
       Parent: pdfRef(2),
       MediaBox: [0, 0, width, height],
-      Resources: { Font: { F1: pdfRef(3), LuxrajText: pdfRef(3) } },
+      Resources: { Font: { F1: pdfRef(3) } },
       Contents: pdfRef(contentObjectId)
     });
     addRawObject(toBytes(pageBody));
@@ -408,8 +408,6 @@ function pdfTextLiteral(text) {
 export function annotationsToPdfContent(annotations, options = {}) {
   if (!Array.isArray(annotations)) throw new TypeError('annotations must be an array.');
   const pageIndex = options.pageIndex ?? 0;
-  const fontName = options.fontName ?? 'LuxrajText';
-  if (typeof fontName !== 'string' || !/^[A-Za-z0-9_-]+$/.test(fontName)) throw new TypeError('fontName must be a simple PDF resource name.');
   const pageWidth = positivePageNumber(options.pageWidth, 'Page width');
   const pageHeight = positivePageNumber(options.pageHeight, 'Page height');
   const canvasWidth = positivePageNumber(options.canvasWidth ?? pageWidth, 'Canvas width');
@@ -484,7 +482,7 @@ export function annotationsToPdfContent(annotations, options = {}) {
     } else if (annotation.type === 'text') {
       const point = contentPoint(points[0], context);
       const size = positivePageNumber(Number(annotation.fontSize ?? 18), 'Font size');
-      commands.push(`BT /${fontName} ${formatNumber(size)} Tf 1 0 0 1 ${formatNumber(point.x)} ${formatNumber(point.y)} Tm ${pdfTextLiteral(annotation.text ?? '')} Tj ET`);
+      commands.push(`BT /F1 ${formatNumber(size)} Tf ${formatNumber(point.x)} ${formatNumber(point.y)} Td ${pdfTextLiteral(annotation.text ?? '')} Tj ET`);
     }
     commands.push('Q');
   }
@@ -792,55 +790,21 @@ export function addAnnotationsToPdf(input, annotations, { pageMetrics = [] } = {
   let nextObjectNumber = maximumObjectNumber + 1;
   const additions = [];
   const modifiedPages = [];
-  let sharedFontObjectNumber = null;
 
   for (let pageIndex = 0; pageIndex < document.pages.length; pageIndex += 1) {
     const page = document.pages[pageIndex];
-    const pageAnnotations = annotations.filter((annotation) => annotation.pageIndex === pageIndex);
-    if (pageAnnotations.length === 0) continue;
+    if (!annotations.some((annotation) => annotation.pageIndex === pageIndex)) continue;
     if (!Number.isInteger(page.object)) throw new SyntaxError('The PDF page is not stored as an indirect object.');
 
     const metrics = pageMetrics[pageIndex] ?? {};
     const canvasWidth = metrics.canvasWidth ?? page.width;
     const canvasHeight = metrics.canvasHeight ?? page.height;
-
-    let fontName = 'LuxrajText';
-    let updatedResources = page.resources && typeof page.resources === 'object' && !Array.isArray(page.resources)
-      ? { ...page.resources }
-      : {};
-    if (pageAnnotations.some((annotation) => annotation.type === 'text')) {
-      let fonts = updatedResources.Font ?? {};
-      fonts = resolvePdfValue(fonts, document.objects);
-      if (!fonts || typeof fonts !== 'object' || Array.isArray(fonts)) {
-        throw new SyntaxError(`Page ${pageIndex + 1} has an unsupported font resources dictionary.`);
-      }
-      fonts = { ...fonts };
-      let suffix = 1;
-      while (Object.hasOwn(fonts, fontName)) fontName = `LuxrajText${++suffix}`;
-      if (sharedFontObjectNumber === null) {
-        sharedFontObjectNumber = nextObjectNumber++;
-        additions.push({
-          objectNumber: sharedFontObjectNumber,
-          generation: 0,
-          body: toBytes(serializePdfValue({
-            Type: pdfName('Font'),
-            Subtype: pdfName('Type1'),
-            BaseFont: pdfName('Helvetica'),
-            Encoding: pdfName('WinAnsiEncoding'),
-          })),
-        });
-      }
-      fonts[fontName] = pdfRef(sharedFontObjectNumber);
-      updatedResources.Font = fonts;
-    }
-
     const operators = annotationsToPdfContent(annotations, {
       pageIndex,
       pageWidth: page.width,
       pageHeight: page.height,
       canvasWidth,
       canvasHeight,
-      fontName,
     });
     if (!operators) continue;
 
@@ -869,7 +833,7 @@ export function addAnnotationsToPdf(input, annotations, { pageMetrics = [] } = {
       throw new SyntaxError(`Page ${pageIndex + 1} uses an unsupported direct Contents value.`);
     }
 
-    const updatedDictionary = { ...page.dictionary, Contents: nextContents, Resources: updatedResources };
+    const updatedDictionary = { ...page.dictionary, Contents: nextContents };
     const pageRecord = document.objects.get(page.object);
     if (!pageRecord) throw new SyntaxError(`Cannot find the page object ${page.object}.`);
     modifiedPages.push({
