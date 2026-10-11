@@ -75,7 +75,7 @@ test('creates a PDF with valid object offsets and a classic cross-reference tabl
   assert.ok(startMatch);
   const xrefOffset = Number(startMatch[1]);
   assert.equal(text.slice(xrefOffset, xrefOffset + 4), 'xref');
-  const xrefLine = text.slice(xrefOffset).split('\n')[2];
+  const xrefLine = text.slice(xrefOffset).split('\n')[3];
   const firstObjectOffset = Number(xrefLine.slice(0, 10));
   assert.equal(text.slice(firstObjectOffset, firstObjectOffset + 7), '1 0 obj');
 });
