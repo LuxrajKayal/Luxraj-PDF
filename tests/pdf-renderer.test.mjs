@@ -109,7 +109,7 @@ test('renders PDF paths and colors into a canvas context', async () => {
       content: 'q 1 0 0 rg 10 20 30 40 re f Q 0 0 1 RG 2 w 5 5 m 50 50 l S',
     }],
   });
-  const document = parsePdfDocument(source);
+  const document = await parsePdfDocument(source);
   const context = new RecordingCanvasContext();
 
   const result = await renderPdfPage(context, document, 0, { scale: 2 });
@@ -133,7 +133,7 @@ test('renders simple text using the page font resource and text matrix', async (
       content: 'BT /F1 12 Tf 1 0 0 1 40 80 Tm (Luxraj) Tj ET',
     }],
   });
-  const document = parsePdfDocument(source);
+  const document = await parsePdfDocument(source);
   const context = new RecordingCanvasContext();
 
   const result = await renderPdfPage(context, document, 0);
@@ -155,7 +155,7 @@ test('handles an unmatched Q safely and reports unsupported image XObjects', asy
       content: 'Q /Im0 Do 10 10 20 20 re S',
     }],
   });
-  const document = parsePdfDocument(source);
+  const document = await parsePdfDocument(source);
   const context = new RecordingCanvasContext();
 
   const result = await renderPdfPage(context, document, 0);
@@ -167,7 +167,7 @@ test('handles an unmatched Q safely and reports unsupported image XObjects', asy
 
 test('rejects invalid page indices and render scales', async () => {
   const source = createPdf({ pages: [{ width: 100, height: 100, content: '' }] });
-  const document = parsePdfDocument(source);
+  const document = await parsePdfDocument(source);
   const context = new RecordingCanvasContext();
 
   await assert.rejects(() => renderPdfPage(context, document, 1), /outside the parsed document/);
@@ -177,7 +177,7 @@ test('rejects invalid page indices and render scales', async () => {
 
 test('decodes FlateDecode page content before drawing', async () => {
   const source = createFlatePdf('0 0 1 rg 10 15 20 25 re f');
-  const document = parsePdfDocument(source);
+  const document = await parsePdfDocument(source);
   const context = new RecordingCanvasContext();
 
   const result = await renderPdfPage(context, document, 0);
@@ -216,7 +216,7 @@ test('renders a Type 3 shading pattern without a compatibility warning', async (
   const source = createPdf({
     pages: [{ width: 100, height: 100, resources, content: 'q /Pattern cs /P1 scn 0 0 100 100 re f Q' }],
   });
-  const document = parsePdfDocument(source);
+  const document = await parsePdfDocument(source);
   const context = new RecordingCanvasContext();
 
   const result = await renderPdfPage(context, document, 0);
@@ -288,7 +288,7 @@ test('uses a Type0 font ToUnicode map when drawing text', async () => {
       Buffer.from('\nendstream', 'latin1'),
     ]),
   ];
-  const document = parsePdfDocument(createClassicPdf(objects));
+  const document = await parsePdfDocument(createClassicPdf(objects));
   const context = new RecordingCanvasContext();
 
   const result = await renderPdfPage(context, document, 0);
@@ -311,7 +311,7 @@ test('applies ExtGState fill and stroke alpha independently', async () => {
       content: 'q /GS1 gs 1 0 0 rg 10 10 20 20 re f 0 0 1 RG 2 w 0 0 m 30 30 l S Q',
     }],
   });
-  const document = parsePdfDocument(source);
+  const document = await parsePdfDocument(source);
   const context = new RecordingCanvasContext();
 
   const result = await renderPdfPage(context, document, 0);
@@ -344,7 +344,7 @@ test('renders an ICCBased image XObject with an 8-bit soft mask', async () => {
       Buffer.from('\nendstream', 'latin1'),
     ]),
   ];
-  const document = parsePdfDocument(createClassicPdf(objects));
+  const document = await parsePdfDocument(createClassicPdf(objects));
   const context = new RecordingCanvasContext();
 
   const result = await renderPdfPage(context, document, 0);
