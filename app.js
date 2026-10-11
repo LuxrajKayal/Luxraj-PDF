@@ -1,4 +1,3 @@
-import { PDFDocument, rgb, StandardFonts } from 'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/+esm';
 import { addAnnotationsToPdf, parsePdfDocument } from './luxraj-pdf-engine.js';
 import { renderPdfPage } from './luxraj-pdf-renderer.js';
 import {
@@ -61,14 +60,6 @@ function setTool(tool) {
   state.tool = tool;
   document.querySelectorAll('.tool-button').forEach(button => button.classList.toggle('active', button.dataset.tool === tool));
   document.querySelectorAll('.page-ink').forEach(canvas => canvas.style.cursor = tool === 'select' ? 'default' : tool === 'text' ? 'text' : tool === 'eraser' ? 'cell' : 'crosshair');
-}
-
-function hexToRgb(hex) {
-  const value = (hex || '#000000').replace('#', '');
-  const full = value.length === 3 ? value.split('').map(ch => ch + ch).join('') : value;
-  const num = Number.parseInt(full, 16);
-  if (!Number.isFinite(num)) return rgb(0, 0, 0);
-  return rgb(((num >> 16) & 255) / 255, ((num >> 8) & 255) / 255, (num & 255) / 255);
 }
 
 function normalizeColor(value) {
@@ -283,11 +274,6 @@ function deleteSelected() {
   if (!state.annotations.some(ann => ann.id === state.selectedId)) return;
   snapshot(); state.annotations = state.annotations.filter(ann => ann.id !== state.selectedId); state.selectedId = null; renderAllAnnotations(); updateAnnotationList(); updateHistoryButtons();
 }
-function toPdfPoint(page, point) {
-  const scaleX = page.width / page.pdfWidth, scaleY = page.height / page.pdfHeight;
-  return { x: point.x / scaleX, y: page.pdfHeight - point.y / scaleY };
-}
-function toPdfColor(hex) { return hexToRgb(hex); }
 async function exportPdf() {
   if (!state.bytes || !state.annotations.length) {
     notify(state.annotations.length ? 'Open a PDF before exporting.' : 'Add an annotation before exporting.');
@@ -298,89 +284,26 @@ async function exportPdf() {
   els.download.textContent = 'Preparing…';
 
   try {
-    let bytes;
-    let exportMethod = 'first-party';
-    try {
-      // First use the independent writer for PDF structures it explicitly supports.
-      // Fall back temporarily for unsupported PDFs to avoid breaking existing exports.
-      const sourceDocument = parsePdfDocument(state.bytes);
-      if (sourceDocument.pages.length !== state.pages.length) {
-        throw new Error('The PDF page count differs between the current renderer and the first-party reader.');
-      }
-      const pageMetrics = state.pages.map((page, index) => {
-        if ((Number(page.pdfPage.rotate) || 0) % 360 !== 0) {
-          throw new Error('Rotated pages are not yet supported by the first-party export path.');
-        }
-        const parsedPage = sourceDocument.pages[index];
-        if (Math.abs(parsedPage.width - page.pdfWidth) > 1 || Math.abs(parsedPage.height - page.pdfHeight) > 1) {
-          throw new Error('The page crop or dimensions are not supported by the first-party export path.');
-        }
-        return { canvasWidth: page.width, canvasHeight: page.height };
-      });
-      bytes = addAnnotationsToPdf(state.bytes, state.annotations, { pageMetrics });
-      const verification = parsePdfDocument(bytes);
-      if (verification.pages.length !== sourceDocument.pages.length) {
-        throw new Error('The first-party writer produced a different page count.');
-      }
-    } catch (firstPartyError) {
-      console.info('Using temporary PDF compatibility fallback:', firstPartyError.message);
-      exportMethod = 'compatibility';
-      const document = await PDFDocument.load(state.bytes.slice());
-      const font = await document.embedFont(StandardFonts.Helvetica);
-      for (const ann of state.annotations) {
-        const page = document.getPage(ann.pageIndex);
-        const pageView = state.pages[ann.pageIndex];
-        const color = toPdfColor(ann.color);
-        const sx = pageView.width / pageView.pdfWidth;
-        const sy = pageView.height / pageView.pdfHeight;
-        const p = ann.points || [];
-        if (ann.type === 'text') {
-          const point = toPdfPoint(pageView, p[0]);
-          page.drawText(ann.text || '', { x: point.x, y: point.y, size: (ann.fontSize || 18) / sy, font, color, opacity: 1 });
-        } else if ((ann.type === 'pen' || ann.type === 'highlight') && p.length > 1) {
-          const thickness = ann.type === 'highlight' ? Math.max(12, ann.thickness * 4) / sx : ann.thickness / sx;
-          for (let i = 1; i < p.length; i += 1) {
-            const a = toPdfPoint(pageView, p[i - 1]);
-            const b = toPdfPoint(pageView, p[i]);
-            page.drawLine({ start: a, end: b, thickness, color, opacity: ann.type === 'highlight' ? 0.33 : 1 });
-          }
-        } else if (p.length >= 2) {
-          const a = p[0], b = p[1];
-          const x = Math.min(a.x, b.x) / sx;
-          const w = Math.abs(b.x - a.x) / sx;
-          const h = Math.abs(b.y - a.y) / sy;
-          const y = pageView.pdfHeight - Math.max(a.y, b.y) / sy;
-          const border = { borderColor: color, borderWidth: ann.thickness / sx, borderOpacity: 1 };
-          if (ann.type === 'rect') {
-            if (ann.fill) page.drawRectangle({ x, y, width: w, height: h, color, opacity: 1, ...border });
-            else page.drawRectangle({ x, y, width: w, height: h, ...border });
-          } else if (ann.type === 'ellipse') {
-            if (ann.fill) page.drawEllipse({ x: x + w / 2, y: y + h / 2, xScale: w / 2, yScale: h / 2, color, opacity: 1, ...border });
-            else page.drawEllipse({ x: x + w / 2, y: y + h / 2, xScale: w / 2, yScale: h / 2, ...border });
-          } else if (ann.type === 'line' || ann.type === 'arrow') {
-            const startPoint = toPdfPoint(pageView, a);
-            const endPoint = toPdfPoint(pageView, b);
-            page.drawLine({ start: startPoint, end: endPoint, thickness: ann.thickness / sx, color });
-            if (ann.type === 'arrow') {
-              const angle = Math.atan2(endPoint.y - startPoint.y, endPoint.x - startPoint.x);
-              const size = Math.max(9, ann.thickness * 3.2) / sx;
-              page.drawLine({
-                start: endPoint,
-                end: { x: endPoint.x - size * Math.cos(angle - Math.PI / 6), y: endPoint.y - size * Math.sin(angle - Math.PI / 6) },
-                thickness: ann.thickness / sx, color,
-              });
-              page.drawLine({
-                start: endPoint,
-                end: { x: endPoint.x - size * Math.cos(angle + Math.PI / 6), y: endPoint.y - size * Math.sin(angle + Math.PI / 6) },
-                thickness: ann.thickness / sx, color,
-              });
-            }
-          }
-        }
-      }
-      bytes = await document.save();
+    const sourceDocument = parsePdfDocument(state.bytes);
+    if (sourceDocument.pages.length !== state.pages.length) {
+      throw new Error('The page count changed between opening and export.');
     }
-
+    const pageMetrics = state.pages.map((page, index) => {
+      if ((Number(page.pdfPage.rotate) || 0) % 360 !== 0) {
+        throw new Error('Rotated pages are not yet supported by the Luxraj export engine.');
+      }
+      const parsedPage = sourceDocument.pages[index];
+      if (Math.abs(parsedPage.width - page.pdfWidth) > 1 || Math.abs(parsedPage.height - page.pdfHeight) > 1) {
+        throw new Error('The page crop or dimensions changed after opening the PDF.');
+      }
+      return { canvasWidth: page.width, canvasHeight: page.height };
+    });
+    // Use only the first-party writer; unsupported features fail explicitly.
+    const bytes = addAnnotationsToPdf(state.bytes, state.annotations, { pageMetrics });
+    const verification = parsePdfDocument(bytes);
+    if (verification.pages.length !== sourceDocument.pages.length) {
+      throw new Error('The Luxraj writer produced a different page count.');
+    }
     const blob = new Blob([bytes], { type: 'application/pdf' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -388,18 +311,15 @@ async function exportPdf() {
     link.download = state.fileName.replace(/\.pdf$/i, '') + '-luxraj-edited.pdf';
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
-    notify(exportMethod === 'first-party'
-      ? 'PDF exported with the Luxraj PDF Engine.'
-      : 'PDF exported using compatibility mode.');
+    notify('PDF exported with the Luxraj PDF Engine.');
   } catch (error) {
     console.error(error);
-    notify(`Export failed: ${error.message || 'unknown error'}`);
+    notify(`Export failed: ${error.message || 'unsupported PDF feature'}`);
   } finally {
     els.download.disabled = false;
     els.download.textContent = buttonText;
   }
 }
-
 els.openButton.addEventListener('click', () => els.fileInput.click());
 els.changeButton.addEventListener('click', () => els.fileInput.click());
 els.fileInput.addEventListener('change', event => openFile(event.target.files?.[0]));
