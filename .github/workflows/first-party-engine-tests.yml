@@ -1,0 +1,26 @@
+name: First-Party Engine Tests
+
+on:
+  push:
+    branches: [own-pdf-engine-foundation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Validate first-party JavaScript
+        run: |
+          node --check luxraj-annotation-core.js
+          node --check luxraj-pdf-engine.js
+      - name: Run automated tests
+        run: npm test
