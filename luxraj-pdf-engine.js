@@ -945,6 +945,8 @@ export async function parsePdfDocument(input) {
   }
 
   const xref = await parseXrefSection(source, startXref);
+  const trailer = { ...xref.trailer };
+  for (const key of ['Type', 'W', 'Index', 'Filter', 'DecodeParms', 'Length', 'XRefStm']) delete trailer[key];
   const objects = new Map();
   const liveEntries = [...xref.entries.entries()]
     .filter(([objectNumber, entry]) => objectNumber > 0 && entry.inUse)
@@ -1013,10 +1015,10 @@ export async function parsePdfDocument(input) {
     });
   }
 
-  const pages = collectPdfPages(objects, xref.trailer);
+  const pages = collectPdfPages(objects, trailer);
   return {
     version: header[1],
-    trailer: xref.trailer,
+    trailer,
     objects,
     pages,
     startXref,
