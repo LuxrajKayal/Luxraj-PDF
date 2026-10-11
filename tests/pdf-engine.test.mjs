@@ -110,7 +110,7 @@ test('converts first-party rectangle, line, and text annotations into PDF operat
   assert.ok(content.includes('20 60 20 20 re\nS'));
   assert.ok(content.includes('0 100 m\n20 80 l\nS'));
   assert.ok(content.includes('BT /F1 12 Tf 10 80 Td (Hello PDF) Tj ET'));
-  assert.equal(content.includes('re\nS\nQ\nq\n'), false);
+  assert.equal(content.split(' re\nS').length - 1, 1);
 });
 
 test('creates annotation-only PDF files with content and validates unsupported Unicode text', () => {
