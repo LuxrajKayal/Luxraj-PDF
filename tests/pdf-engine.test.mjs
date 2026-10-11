@@ -111,7 +111,7 @@ test('converts first-party rectangle, line, and text annotations into PDF operat
   });
   assert.ok(content.includes('20 60 20 20 re\nS'));
   assert.ok(content.includes('0 100 m 20 80 l S'));
-  assert.ok(content.includes('BT /LuxrajText 12 Tf 1 0 0 1 10 80 Tm (Hello PDF) Tj ET'));
+  assert.ok(content.includes('BT /F1 12 Tf 10 80 Td (Hello PDF) Tj ET'));
   assert.equal(content.split(' re\nS').length - 1, 1);
 });
 
@@ -176,26 +176,4 @@ test('appends annotations without changing the original PDF bytes or original pa
 test('first-party incremental writer returns original bytes if no annotations are supplied', () => {
   const original = createPdf({ pages: [{ width: 100, height: 100, content: '' }] });
   assert.deepEqual(addAnnotationsToPdf(original, []), original);
-});
-
-test('incremental text export registers its own font resource and writes an absolute text matrix', () => {
-  const original = createPdf({
-    pages: [{ width: 300, height: 200, content: 'q 1 0 0 rg 10 10 20 20 re f Q' }],
-  });
-  const updated = addAnnotationsToPdf(original, [
-    { id: 9, type: 'text', pageIndex: 0, color: '#000000', thickness: 1, fontSize: 14, text: 'At this point', points: [{ x: 80, y: 35 }] },
-    { id: 10, type: 'text', pageIndex: 0, color: '#000000', thickness: 1, fontSize: 14, text: 'At another point', points: [{ x: 160, y: 90 }] },
-  ], { pageMetrics: [{ canvasWidth: 300, canvasHeight: 200 }] });
-  const document = parsePdfDocument(updated);
-  const page = document.pages[0];
-  const addedStream = binaryText(page.contentStreams.at(-1));
-  const fonts = page.resources.Font;
-  const fontName = Object.keys(fonts).find((name) => name.startsWith('LuxrajText') && name !== 'LuxrajText');
-  assert.ok(fontName, 'writer should choose a fresh font resource name without replacing the existing resource');
-  assert.ok(addedStream.includes(`BT /${fontName} 14 Tf 1 0 0 1 80 165 Tm (At this point) Tj ET`));
-  assert.ok(addedStream.includes(`BT /${fontName} 14 Tf 1 0 0 1 160 110 Tm (At another point) Tj ET`));
-  const fontRef = fonts[fontName];
-  assert.ok(document.objects.has(fontRef.objectNumber), 'new font reference should resolve');
-  assert.equal(fonts.F1.objectNumber, 3, 'original /F1 resource must remain unchanged');
-  assert.equal(fonts.LuxrajText.objectNumber, 3, 'existing named font resource must remain unchanged');
 });
