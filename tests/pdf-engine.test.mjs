@@ -126,9 +126,9 @@ test('creates annotation-only PDF files with content and validates unsupported U
   assert.ok(text.includes(' l S'));
   assert.ok(text.includes('startxref'));
   assert.throws(() => annotationsToPdfContent(
-    [{ type: 'text', pageIndex: 0, text: 'café', points: [{ x: 0, y: 0 }] }],
+    [{ type: 'text', pageIndex: 0, text: 'こんにちは', points: [{ x: 0, y: 0 }] }],
     { pageWidth: 200, pageHeight: 100 }
-  ), /ASCII annotation text only/);
+  ), /Windows-1252 text only/);
 });
 
 test('reads page boxes and directly sized content streams from a classic-xref PDF', () => {
