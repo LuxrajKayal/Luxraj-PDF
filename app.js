@@ -273,7 +273,6 @@ async function exportPdf() {
       const pdfAnnotations = state.annotations.map(annotation => {
         const page = state.pages[annotation.pageIndex];
         const parsedPage = sourceDocument.pages[annotation.pageIndex];
-        const [boxX, boxY, boxRight, boxTop] = parsedPage.mediaBox;
         const scale = page.viewport.scale || page.scale || 1;
         return {
           ...annotation,
