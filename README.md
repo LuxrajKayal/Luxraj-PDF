@@ -2,7 +2,7 @@
 
 Luxraj Editor is an independently written browser-based PDF annotation workspace. Its first-party `luxraj-annotation-core.js` module implements annotation creation, drawing, geometry, selection hit-testing, movement, undo/redo history, and annotation-state serialization. This module has no third-party runtime dependencies.
 
-The surrounding application currently uses PDF.js to read and render input PDFs and pdf-lib to write annotated PDFs. Replacing those PDF-engine dependencies is a separate engineering project; see [LIBRARY-ROADMAP.md](LIBRARY-ROADMAP.md). The project does not copy source files from the earlier test application.
+The surrounding application currently uses PDF.js to read and render input PDFs and pdf-lib to write annotated PDFs. Replacing those PDF-engine dependencies is a separate engineering project; see [LIBRARY-ROADMAP.md](LIBRARY-ROADMAP.md). The application and annotation core are being developed as an independent clean-room implementation.
 
 ## Run locally
 
