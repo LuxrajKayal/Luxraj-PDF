@@ -154,7 +154,7 @@ test('rejects unsupported xref-stream PDFs and invalid document data clearly', (
   assert.throws(() => parsePdfDocument(xrefStream), /xref offset|xref stream/i);
 });
 
-test('appends annotations without changing the original PDF bytes or original page stream', () => {
+test('appends annotations while isolating their graphics state from the original page streams', () => {
   const original = createPdf({
     pages: [{ width: 200, height: 100, content: 'q 0.2 0.3 0.4 rg 5 5 40 30 re f Q' }],
   });
@@ -166,11 +166,31 @@ test('appends annotations without changing the original PDF bytes or original pa
   assert.deepEqual(updatedBytes.slice(0, original.length), original);
   const after = parsePdfDocument(updatedBytes);
   assert.equal(after.pages.length, 1);
-  assert.equal(after.pages[0].contentStreams.length, 2);
-  assert.equal(binaryText(after.pages[0].contentStreams[0]), 'q 0.2 0.3 0.4 rg 5 5 40 30 re f Q');
-  assert.ok(binaryText(after.pages[0].contentStreams[1]).includes('10 70 20 20 re'));
+  assert.equal(after.pages[0].contentStreams.length, 4);
+  assert.equal(binaryText(after.pages[0].contentStreams[0]), 'q\n');
+  assert.equal(binaryText(after.pages[0].contentStreams[1]), 'q 0.2 0.3 0.4 rg 5 5 40 30 re f Q');
+  assert.equal(binaryText(after.pages[0].contentStreams[2]), 'Q\n');
+  assert.ok(binaryText(after.pages[0].contentStreams[3]).includes('10 70 20 20 re'));
   assert.equal(after.trailer.Prev, before.startXref);
   assert.ok(after.startXref > before.startXref);
+});
+
+test('wraps unbalanced source-page transforms so exported marks use page coordinates', () => {
+  // Chromium-generated PDFs can leave a page-wide CTM active outside a q/Q pair.
+  const originalContent = '.24 0 0 -.24 0 100 cm\nq 1 0 0 rg 10 10 20 20 re f Q';
+  const original = createPdf({
+    pages: [{ width: 200, height: 100, content: originalContent }],
+  });
+  const updatedBytes = addAnnotationsToPdf(original, [
+    { id: 2, type: 'line', pageIndex: 0, color: '#2563eb', thickness: 3, points: [{ x: 100, y: 25 }, { x: 150, y: 75 }] },
+  ], { pageMetrics: [{ canvasWidth: 200, canvasHeight: 100 }] });
+
+  const after = parsePdfDocument(updatedBytes);
+  assert.equal(after.pages[0].contentStreams.length, 4);
+  assert.equal(binaryText(after.pages[0].contentStreams[0]), 'q\n');
+  assert.equal(binaryText(after.pages[0].contentStreams[1]), originalContent);
+  assert.equal(binaryText(after.pages[0].contentStreams[2]), 'Q\n');
+  assert.ok(binaryText(after.pages[0].contentStreams[3]).includes('100 75 m 150 25 l S'));
 });
 
 test('incremental export registers a dedicated Helvetica resource and converts text size and position', () => {
