@@ -111,7 +111,7 @@ test('converts first-party rectangle, line, and text annotations into PDF operat
   });
   assert.ok(content.includes('20 60 20 20 re\nS'));
   assert.ok(content.includes('0 100 m 20 80 l S'));
-  assert.ok(content.includes('BT /F1 12 Tf 10 80 Td (Hello PDF) Tj ET'));
+  assert.ok(content.includes('BT /F1 24 Tf 10 80 Td (Hello PDF) Tj ET'));
   assert.equal(content.split(' re\nS').length - 1, 1);
 });
 
@@ -171,6 +171,79 @@ test('appends annotations without changing the original PDF bytes or original pa
   assert.ok(binaryText(after.pages[0].contentStreams[1]).includes('10 70 20 20 re'));
   assert.equal(after.trailer.Prev, before.startXref);
   assert.ok(after.startXref > before.startXref);
+});
+
+test('incremental export registers a dedicated Helvetica resource and converts text size and position', () => {
+  const original = createPdf({
+    pages: [{
+      width: 200,
+      height: 100,
+      content: 'q 0.2 0.3 0.4 rg 5 5 40 30 re f Q',
+      resources: { ProcSet: [pdfName('PDF')] },
+    }],
+  });
+  const before = parsePdfDocument(original);
+  const updatedBytes = addAnnotationsToPdf(original, [
+    {
+      id: 10,
+      type: 'text',
+      pageIndex: 0,
+      color: '#000000',
+      thickness: 1,
+      fontSize: 10,
+      text: 'Center',
+      points: [{ x: 50, y: 25 }],
+    },
+  ], { pageMetrics: [{ canvasWidth: 100, canvasHeight: 50 }] });
+
+  assert.deepEqual(updatedBytes.slice(0, original.length), original);
+  const after = parsePdfDocument(updatedBytes);
+  const page = after.pages[0];
+  assert.deepEqual(page.resources.ProcSet, [pdfName('PDF')]);
+
+  const fontReference = page.resources.Font.LuxrajText;
+  assert.ok(fontReference instanceof PdfReference);
+  const fontObject = after.objects.get(fontReference.objectNumber);
+  assert.equal(fontObject.value.Type.value, 'Font');
+  assert.equal(fontObject.value.Subtype.value, 'Type1');
+  assert.equal(fontObject.value.BaseFont.value, 'Helvetica');
+  assert.equal(fontObject.value.Encoding.value, 'WinAnsiEncoding');
+
+  const originalContent = binaryText(page.contentStreams[0]);
+  const annotationContent = binaryText(page.contentStreams[1]);
+  assert.equal(originalContent, 'q 0.2 0.3 0.4 rg 5 5 40 30 re f Q');
+  assert.ok(annotationContent.includes('BT /LuxrajText 20 Tf 100 50 Td (Center) Tj ET'));
+  assert.equal(before.pages.length, after.pages.length);
+});
+
+test('incremental export avoids overwriting a same-named font resource already in the PDF', () => {
+  const original = createPdf({
+    pages: [{
+      width: 200,
+      height: 100,
+      content: 'BT /LuxrajText 12 Tf 10 80 Td (Original) Tj ET',
+      resources: { Font: { LuxrajText: pdfRef(3) } },
+    }],
+  });
+  const updatedBytes = addAnnotationsToPdf(original, [
+    {
+      id: 11,
+      type: 'text',
+      pageIndex: 0,
+      color: '#000000',
+      thickness: 1,
+      fontSize: 10,
+      text: 'Added',
+      points: [{ x: 50, y: 25 }],
+    },
+  ], { pageMetrics: [{ canvasWidth: 100, canvasHeight: 50 }] });
+
+  const after = parsePdfDocument(updatedBytes);
+  const fonts = after.pages[0].resources.Font;
+  assert.equal(fonts.LuxrajText.objectNumber, 3);
+  assert.ok(fonts.LuxrajText1 instanceof PdfReference);
+  const addedContent = binaryText(after.pages[0].contentStreams.at(-1));
+  assert.ok(addedContent.includes('BT /LuxrajText1 20 Tf 100 50 Td (Added) Tj ET'));
 });
 
 test('first-party incremental writer returns original bytes if no annotations are supplied', () => {
