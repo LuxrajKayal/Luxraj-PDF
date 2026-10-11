@@ -4,7 +4,7 @@ Luxraj Editor is a browser-based PDF annotation workspace. Its annotation system
 
 ## PDF compatibility status
 
-**PDF.js has been removed from the application.** The app now attempts to open and render PDFs using `luxraj-pdf-engine.js` and `luxraj-pdf-renderer.js` only. This is an early, limited renderer and does not yet support every PDF structure or page feature. Some PDFs—including files using xref streams, compressed object streams, encryption, unsupported filters, Form XObjects, complex fonts, or other unimplemented features—will fail to open or render completely. This is an intentional trade-off for this development stage; unsupported content is not sent to a hidden PDF.js fallback.
+**PDF.js has been removed from the application.** The app now attempts to open and render PDFs using `luxraj-pdf-engine.js` and `luxraj-pdf-renderer.js` only. This is an early, limited renderer and does not yet support every PDF structure or page feature. Some PDFs—including encrypted files, files with unsupported stream filters or indirect stream lengths, Form XObjects, complex fonts, page-stream predictors not yet supported by the renderer, and other unimplemented features—may still fail to open or render completely. The parser now supports xref streams and Flate-compressed object streams, including supported PNG stream predictors. This is an intentional trade-off for this development stage; unsupported content is not sent to a hidden PDF.js fallback.
 
 Export uses the first-party incremental writer only. There is no PDF.js or pdf-lib fallback; if a PDF structure or annotation feature is outside the engine's supported subset, export reports the limitation instead of loading another PDF library.
 
@@ -21,11 +21,11 @@ Then visit `http://localhost:8000`.
 
 ## First-party PDF-engine scope
 
-The code in `luxraj-pdf-engine.js` currently supports common PDF values and serialization, basic PDF creation, and a limited reader for classic cross-reference tables, indirect objects, page trees, page boxes, and directly sized streams. Its incremental writer adds supported annotations while retaining original source bytes and content streams.
+The code in `luxraj-pdf-engine.js` supports common PDF values and serialization, basic PDF creation, classic cross-reference tables, xref streams, compressed object streams, indirect objects, page trees, page boxes, and directly sized streams. Structural FlateDecode streams can use supported PNG predictors. Structural parsing is asynchronous and uses the platform's built-in stream decompression API. Its incremental writer adds supported annotations while retaining original source bytes and content streams.
 
 The `luxraj-pdf-renderer.js` module renders a limited subset of page content operators to Canvas: common paths, fills and strokes, color operators, graphics-state transforms, basic text using standard font names, simple ToUnicode CMaps, basic image XObjects, some graphics-state opacity, simple axial/radial patterns, ASCIIHexDecode, and FlateDecode streams without predictors.
 
-**Not supported yet:** xref streams, compressed object streams, encrypted PDFs, indirect stream lengths, predictor decoding, inline images, Form XObjects, complex font encodings, broad Unicode font mapping, advanced clipping/graphics states, and many PDF operators. If a PDF is unsupported, the app reports that it cannot open the document yet.
+**Not supported yet:** encrypted PDFs, indirect stream lengths, unsupported structural/page stream filters, TIFF predictors other than the supported 8-bit case, predictor decoding in the page renderer, inline images, Form XObjects, complex font encodings, broad Unicode font mapping, advanced clipping/graphics states, and many PDF operators. If a PDF is unsupported, the app reports that it cannot open the document yet.
 
 ## Privacy and external libraries
 
