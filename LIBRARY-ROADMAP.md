@@ -45,7 +45,7 @@ Implement a tested PDF drawing-operator subset and build up text, paths, images,
 
 ## v1.0 — Remove external PDF-engine dependencies (future target)
 
-The app currently uses PDF.js to read/render pages and pdf-lib as a temporary export fallback. Only after our own reader, renderer, and source-preserving writer pass fixture-based validation should the app stop loading those libraries. Their notices must remain accurate until they are no longer used.
+The app currently uses PDF.js to read/render pages and dynamically loads pdf-lib only as a temporary export fallback. Only after our own reader, renderer, and source-preserving writer pass fixture-based validation should the app stop loading those libraries. Their notices must remain accurate until they are no longer used.
 
 ## Quality and ownership rules
 
