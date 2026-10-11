@@ -231,9 +231,9 @@ test('incremental export registers a dedicated Helvetica resource and converts t
 
   const originalContent = binaryText(page.contentStreams[1]);
   const annotationContent = binaryText(page.contentStreams[3]);
-  assert.equal(binaryText(page.contentStreams[0]), 'q\\n');
+  assert.equal(binaryText(page.contentStreams[0]), 'q\n');
   assert.equal(originalContent, 'q 0.2 0.3 0.4 rg 5 5 40 30 re f Q');
-  assert.equal(binaryText(page.contentStreams[2]), 'Q\\n');
+  assert.equal(binaryText(page.contentStreams[2]), 'Q\n');
   assert.ok(annotationContent.includes('BT /LuxrajText 20 Tf 100 50 Td (Center) Tj ET'));
   assert.equal(before.pages.length, after.pages.length);
 });
