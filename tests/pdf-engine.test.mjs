@@ -5,6 +5,7 @@ import {
   PdfName,
   PdfReference,
   PdfString,
+  addAnnotationsToPdf,
   annotationsToPdfContent,
   createAnnotationPdf,
   createPdf,
@@ -151,4 +152,28 @@ test('rejects unsupported xref-stream PDFs and invalid document data clearly', (
   assert.throws(() => parsePdfDocument(new Uint8Array([1, 2, 3])), /recognizable PDF header/);
   const xrefStream = new TextEncoder().encode('%PDF-1.5\n1 0 obj << /Type /XRef >>\nstartxref\n10\n%%EOF');
   assert.throws(() => parsePdfDocument(xrefStream), /xref offset|xref stream/i);
+});
+
+test('appends annotations without changing the original PDF bytes or original page stream', () => {
+  const original = createPdf({
+    pages: [{ width: 200, height: 100, content: 'q 0.2 0.3 0.4 rg 5 5 40 30 re f Q' }],
+  });
+  const before = parsePdfDocument(original);
+  const updatedBytes = addAnnotationsToPdf(original, [
+    { id: 1, type: 'rect', pageIndex: 0, color: '#ff0000', thickness: 2, fill: false, points: [{ x: 10, y: 10 }, { x: 30, y: 30 }] },
+  ], { pageMetrics: [{ canvasWidth: 200, canvasHeight: 100 }] });
+
+  assert.deepEqual(updatedBytes.slice(0, original.length), original);
+  const after = parsePdfDocument(updatedBytes);
+  assert.equal(after.pages.length, 1);
+  assert.equal(after.pages[0].contentStreams.length, 2);
+  assert.equal(binaryText(after.pages[0].contentStreams[0]), 'q 0.2 0.3 0.4 rg 5 5 40 30 re f Q');
+  assert.ok(binaryText(after.pages[0].contentStreams[1]).includes('10 70 20 20 re'));
+  assert.equal(after.trailer.Prev, before.startXref);
+  assert.ok(after.startXref > before.startXref);
+});
+
+test('first-party incremental writer returns original bytes if no annotations are supplied', () => {
+  const original = createPdf({ pages: [{ width: 100, height: 100, content: '' }] });
+  assert.deepEqual(addAnnotationsToPdf(original, []), original);
 });
