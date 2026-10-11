@@ -1,0 +1,10 @@
+{
+  "name": "luxraj-pdf",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Luxraj Editor and first-party annotation core",
+  "scripts": {
+    "test": "node --test"
+  }
+}
