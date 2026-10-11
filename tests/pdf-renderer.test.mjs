@@ -1,7 +1,42 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { deflateSync } from 'node:zlib';
 import { createPdf, parsePdfDocument } from '../luxraj-pdf-engine.js';
 import { renderPdfPage } from '../luxraj-pdf-renderer.js';
+
+
+function createFlatePdf(content) {
+  const encodedContent = deflateSync(Buffer.from(content, 'latin1'));
+  const objects = [
+    Buffer.from('<< /Type /Catalog /Pages 2 0 R >>', 'latin1'),
+    Buffer.from('<< /Type /Pages /Kids [4 0 R] /Count 1 >>', 'latin1'),
+    Buffer.from('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>', 'latin1'),
+    Buffer.from('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>', 'latin1'),
+    Buffer.concat([
+      Buffer.from('<< /Length ' + encodedContent.length + ' /Filter /FlateDecode >>\nstream\n', 'latin1'),
+      encodedContent,
+      Buffer.from('\nendstream', 'latin1'),
+    ]),
+  ];
+  const parts = [Buffer.from('%PDF-1.4\n', 'latin1')];
+  const offsets = [0];
+  let length = parts[0].length;
+  objects.forEach((body, index) => {
+    const head = Buffer.from((index + 1) + ' 0 obj\n', 'latin1');
+    const tail = Buffer.from('\nendobj\n', 'latin1');
+    offsets.push(length);
+    parts.push(head, body, tail);
+    length += head.length + body.length + tail.length;
+  });
+  const xrefOffset = length;
+  let xref = 'xref\n0 ' + (objects.length + 1) + '\n0000000000 65535 f \n';
+  for (let i = 1; i < offsets.length; i += 1) {
+    xref += String(offsets[i]).padStart(10, '0') + ' 00000 n \n';
+  }
+  xref += 'trailer\n<< /Size ' + (objects.length + 1) + ' /Root 1 0 R >>\nstartxref\n' + xrefOffset + '\n%%EOF\n';
+  parts.push(Buffer.from(xref, 'latin1'));
+  return new Uint8Array(Buffer.concat(parts));
+}
 
 class RecordingCanvasContext {
   constructor() {
@@ -104,4 +139,17 @@ test('rejects invalid page indices and render scales', async () => {
 
   await assert.rejects(() => renderPdfPage(context, document, 1), /outside the parsed document/);
   await assert.rejects(() => renderPdfPage(context, document, 0, { scale: 0 }), /positive finite number/);
+});
+
+
+test('decodes FlateDecode page content before drawing', async () => {
+  const source = createFlatePdf('0 0 1 rg 10 15 20 25 re f');
+  const document = parsePdfDocument(source);
+  const context = new RecordingCanvasContext();
+
+  const result = await renderPdfPage(context, document, 0);
+
+  assert.ok(context.calls.some((call) => call.name === 'rect' && call.args.join(' ') === '10 15 20 25'));
+  assert.ok(context.calls.some((call) => call.name === 'fill'));
+  assert.deepEqual(result.warnings, []);
 });
