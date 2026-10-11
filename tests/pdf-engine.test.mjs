@@ -5,6 +5,8 @@ import {
   PdfName,
   PdfReference,
   PdfString,
+  annotationsToPdfContent,
+  createAnnotationPdf,
   createPdf,
   parsePdfValue,
   pdfHexString,
@@ -93,4 +95,36 @@ test('rejects invalid PDF writer input', () => {
   assert.throws(() => createPdf({ pages: 'no' }), /pages must be an array/);
   assert.throws(() => createPdf({ pages: [{ width: 0, height: 100 }] }), /Page width must be a positive/);
   assert.throws(() => serializePdfValue(Number.POSITIVE_INFINITY), /finite/);
+});
+
+test('converts first-party rectangle, line, and text annotations into PDF operators', () => {
+  const annotations = [
+    { id: 1, type: 'rect', pageIndex: 0, color: '#ff0000', thickness: 2, fill: false, points: [{ x: 10, y: 10 }, { x: 20, y: 20 }] },
+    { id: 2, type: 'line', pageIndex: 0, color: '#0000ff', thickness: 1, points: [{ x: 0, y: 0 }, { x: 10, y: 10 }] },
+    { id: 3, type: 'text', pageIndex: 0, color: '#000000', thickness: 1, fontSize: 12, text: 'Hello PDF', points: [{ x: 5, y: 10 }] },
+    { id: 4, type: 'rect', pageIndex: 1, color: '#000000', thickness: 1, points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] },
+  ];
+  const content = annotationsToPdfContent(annotations, {
+    pageIndex: 0, pageWidth: 200, pageHeight: 100, canvasWidth: 100, canvasHeight: 50,
+  });
+  assert.ok(content.includes('20 60 20 20 re\nS'));
+  assert.ok(content.includes('0 100 m\n20 80 l\nS'));
+  assert.ok(content.includes('BT /F1 12 Tf 10 80 Td (Hello PDF) Tj ET'));
+  assert.equal(content.includes('re\nS\nQ\nq\n'), false);
+});
+
+test('creates annotation-only PDF files with content and validates unsupported Unicode text', () => {
+  const bytes = createAnnotationPdf({
+    pages: [{ width: 200, height: 100, canvasWidth: 100, canvasHeight: 50 }],
+    annotations: [{ type: 'arrow', pageIndex: 0, color: '#123456', thickness: 2, points: [{ x: 10, y: 10 }, { x: 50, y: 25 }] }],
+  });
+  const text = binaryText(bytes);
+  assert.ok(text.startsWith('%PDF-1.4'));
+  assert.ok(text.includes(' RG'));
+  assert.ok(text.includes(' l S'));
+  assert.ok(text.includes('startxref'));
+  assert.throws(() => annotationsToPdfContent(
+    [{ type: 'text', pageIndex: 0, text: 'café', points: [{ x: 0, y: 0 }] }],
+    { pageWidth: 200, pageHeight: 100 }
+  ), /ASCII annotation text only/);
 });
