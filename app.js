@@ -228,8 +228,16 @@ function deleteSelected() {
   snapshot(); state.annotations = state.annotations.filter(ann => ann.id !== state.selectedId); state.selectedId = null; renderAllAnnotations(); updateAnnotationList(); updateHistoryButtons();
 }
 function toPdfPoint(page, point) {
-  const scaleX = page.width / page.pdfWidth, scaleY = page.height / page.pdfHeight;
-  return { x: point.x / scaleX, y: page.pdfHeight - point.y / scaleY };
+  // Use PDF.js's inverse viewport transform instead of assuming a simple scale
+  // and Y flip. This also accounts for page-box offsets and viewport geometry.
+  const viewport = page.viewport;
+  const canvasX = point.x * (viewport.width / page.width);
+  const canvasY = point.y * (viewport.height / page.height);
+  const [pdfX, pdfY] = viewport.convertToPdfPoint(canvasX, canvasY);
+  return {
+    x: pdfX - page.pdfPage.view[0],
+    y: pdfY - page.pdfPage.view[1],
+  };
 }
 function toPdfColor(hex, rgbFactory) { return hexToRgb(hex, rgbFactory); }
 async function exportPdf() {
@@ -259,9 +267,30 @@ async function exportPdf() {
         if (Math.abs(parsedPage.width - page.pdfWidth) > 1 || Math.abs(parsedPage.height - page.pdfHeight) > 1) {
           throw new Error('The page crop or dimensions are not supported by the first-party export path.');
         }
-        return { canvasWidth: page.width, canvasHeight: page.height };
+        // The engine receives coordinates already converted to native PDF units.
+        return { canvasWidth: parsedPage.width, canvasHeight: parsedPage.height };
       });
-      bytes = addAnnotationsToPdf(state.bytes, state.annotations, { pageMetrics });
+      const pdfAnnotations = state.annotations.map(annotation => {
+        const page = state.pages[annotation.pageIndex];
+        const parsedPage = sourceDocument.pages[annotation.pageIndex];
+        const [boxX, boxY, boxRight, boxTop] = parsedPage.mediaBox;
+        const scale = page.viewport.scale || page.scale || 1;
+        return {
+          ...annotation,
+          points: (annotation.points || []).map(point => {
+            const converted = toPdfPoint(page, point);
+            return {
+              x: converted.x,
+              // toPdfPoint returns a bottom-left PDF coordinate; the engine's
+              // annotation API uses a top-left origin, so convert it back here.
+              y: parsedPage.height - converted.y,
+            };
+          }),
+          thickness: annotation.thickness / scale,
+          fontSize: annotation.fontSize ? annotation.fontSize / scale : annotation.fontSize,
+        };
+      });
+      bytes = addAnnotationsToPdf(state.bytes, pdfAnnotations, { pageMetrics });
       const verification = parsePdfDocument(bytes);
       if (verification.pages.length !== sourceDocument.pages.length) {
         throw new Error('The first-party writer produced a different page count.');
@@ -281,7 +310,7 @@ async function exportPdf() {
         const p = ann.points || [];
         if (ann.type === 'text') {
           const point = toPdfPoint(pageView, p[0]);
-          page.drawText(ann.text || '', { x: point.x, y: point.y, size: ann.fontSize || 18, font, color, opacity: 1 });
+          page.drawText(ann.text || '', { x: point.x, y: point.y, size: (ann.fontSize || 18) / (pageView.viewport.scale || pageView.scale || 1), font, color, opacity: 1 });
         } else if ((ann.type === 'pen' || ann.type === 'highlight') && p.length > 1) {
           const thickness = ann.type === 'highlight' ? Math.max(12, ann.thickness * 4) / sx : ann.thickness / sx;
           for (let i = 1; i < p.length; i += 1) {
