@@ -863,26 +863,42 @@ export function addAnnotationsToPdf(input, annotations, { pageMetrics = [] } = {
     const translatedOperators = (x0 !== 0 || y0 !== 0)
       ? `q\n${formatNumber(x0)} ${formatNumber(y0)} cm\n${operators}Q\n`
       : operators;
-    const streamBytes = encoder.encode(translatedOperators);
-    const streamObjectNumber = nextObjectNumber++;
-    const streamBody = concatBytes([
-      toBytes(`<< /Length ${streamBytes.length} >>\nstream\n`),
-      streamBytes,
-      toBytes('\nendstream'),
-    ]);
-    additions.push({ objectNumber: streamObjectNumber, generation: 0, body: streamBody });
-
+    // PDF content streams are concatenated in order, so graphics state (including
+    // the current transformation matrix) may leak from existing page content into
+    // appended operators. Bracket the original streams with q/Q to restore the
+    // default graphics state before drawing our canvas-coordinate annotations.
     const existingContents = page.dictionary.Contents;
-    let nextContents;
+    let existingContentRefs;
     if (existingContents === undefined || existingContents === null) {
-      nextContents = pdfRef(streamObjectNumber);
+      existingContentRefs = [];
     } else if (existingContents instanceof PdfReference) {
-      nextContents = [existingContents, pdfRef(streamObjectNumber)];
+      existingContentRefs = [existingContents];
     } else if (Array.isArray(existingContents) && existingContents.every((value) => value instanceof PdfReference)) {
-      nextContents = [...existingContents, pdfRef(streamObjectNumber)];
+      existingContentRefs = [...existingContents];
     } else {
       throw new SyntaxError(`Page ${pageIndex + 1} uses an unsupported direct Contents value.`);
     }
+
+    const makeStreamObject = (streamBytes) => ({
+      objectNumber: nextObjectNumber++,
+      generation: 0,
+      body: concatBytes([
+        toBytes(`<< /Length ${streamBytes.length} >>\nstream\n`),
+        streamBytes,
+        toBytes('\nendstream'),
+      ]),
+    });
+    const openGraphicsState = makeStreamObject(encoder.encode('q\n'));
+    const closeGraphicsState = makeStreamObject(encoder.encode('Q\n'));
+    const annotationStream = makeStreamObject(encoder.encode(translatedOperators));
+    additions.push(openGraphicsState, closeGraphicsState, annotationStream);
+
+    const nextContents = [
+      pdfRef(openGraphicsState.objectNumber),
+      ...existingContentRefs,
+      pdfRef(closeGraphicsState.objectNumber),
+      pdfRef(annotationStream.objectNumber),
+    ];
 
     const updatedDictionary = { ...page.dictionary, Contents: nextContents };
     const pageHasText = annotations.some((annotation) =>
