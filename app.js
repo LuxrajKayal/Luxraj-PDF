@@ -1,5 +1,6 @@
 import { PDFDocument, rgb, StandardFonts } from 'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/+esm';
 import { addAnnotationsToPdf, parsePdfDocument } from './luxraj-pdf-engine.js';
+import { renderPdfPage } from './luxraj-pdf-renderer.js';
 import {
   AnnotationHistory, cloneAnnotationList as cloneAnnotations, createAnnotation,
   findAnnotationAt, translateAnnotation, renderAnnotationLayer
@@ -21,7 +22,7 @@ const els = {
 };
 
 const state = {
-  bytes: null, pdf: null, fileName: '', pages: [], annotations: [], selectedId: null,
+  bytes: null, pdf: null, renderMode: 'pdfjs', fileName: '', pages: [], annotations: [], selectedId: null,
   tool: 'select', color: '#2563eb', thickness: 3, fill: false,
   history: new AnnotationHistory(60), nextId: 1, interaction: null, toastTimer: null
 };
@@ -92,22 +93,128 @@ async function openFile(file) {
   try {
     notify('Opening PDF…');
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const pdf = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
-    state.bytes = bytes; state.pdf = pdf; state.fileName = file.name;
-    state.pages = []; state.annotations = []; state.selectedId = null; state.history.clear(); state.nextId = 1;
+    let pdf;
+    let firstPartyPages = null;
+    let renderMode = 'first-party';
+
+    try {
+      const parsedDocument = parsePdfDocument(bytes);
+      firstPartyPages = await renderFirstPartyPages(parsedDocument);
+      pdf = parsedDocument;
+    } catch (firstPartyError) {
+      // Continue to show complete documents while the first-party renderer's
+      // operator and file-format coverage is still growing.
+      console.info('Using compatibility PDF renderer:', firstPartyError.message);
+      firstPartyPages = null;
+      renderMode = 'pdfjs';
+      pdf = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+    }
+
+    state.bytes = bytes;
+    state.pdf = pdf;
+    state.renderMode = renderMode;
+    state.fileName = file.name;
+    state.pages = [];
+    state.annotations = [];
+    state.selectedId = null;
+    state.history.clear();
+    state.nextId = 1;
     els.pagesContainer.replaceChildren();
-    els.welcome.hidden = true; els.pagesContainer.hidden = false;
+    els.welcome.hidden = true;
+    els.pagesContainer.hidden = false;
     els.docName.textContent = file.name;
     els.propDocName.textContent = file.name;
-    els.propDocPages.textContent = `${pdf.numPages} page${pdf.numPages === 1 ? '' : 's'}`;
-    els.pageStatus.textContent = `${pdf.numPages} page${pdf.numPages === 1 ? '' : 's'}`;
+    els.propDocPages.textContent = pdf.pages
+      ? pdf.pages.length + ' page' + (pdf.pages.length === 1 ? '' : 's')
+      : pdf.numPages + ' page' + (pdf.numPages === 1 ? '' : 's');
+    els.pageStatus.textContent = els.propDocPages.textContent;
     els.download.disabled = false;
-    for (let i = 1; i <= pdf.numPages; i++) await renderPage(i);
-    renderAllAnnotations(); updateAnnotationList(); updateHistoryButtons();
-    notify(`Opened ${file.name}`);
+
+    if (firstPartyPages) {
+      els.pagesContainer.append(firstPartyPages.fragment);
+      state.pages = firstPartyPages.pages;
+    } else {
+      for (let i = 1; i <= pdf.numPages; i++) await renderPage(i);
+    }
+
+    renderAllAnnotations();
+    updateAnnotationList();
+    updateHistoryButtons();
+    notify(renderMode === 'first-party'
+      ? 'Opened with the Luxraj PDF renderer.'
+      : 'Opened with compatibility rendering.');
   } catch (error) {
-    console.error(error); notify(`Could not open this PDF: ${error.message || 'unknown error'}`);
+    console.error(error);
+    notify('Could not open this PDF: ' + (error.message || 'unknown error'));
   }
+}
+
+async function renderFirstPartyPages(parsedDocument) {
+  if (!parsedDocument.pages.length) throw new Error('The first-party reader found no pages.');
+
+  const fragment = document.createDocumentFragment();
+  const pages = [];
+  for (let index = 0; index < parsedDocument.pages.length; index += 1) {
+    const parsedPage = parsedDocument.pages[index];
+    const desiredScale = Math.min(1.55, Math.max(0.75,
+      (els.scroll.clientWidth - 80) / parsedPage.width));
+    const width = Math.ceil(parsedPage.width * desiredScale);
+    const height = Math.ceil(parsedPage.height * desiredScale);
+    const wrapper = document.createElement('article');
+    wrapper.className = 'page-wrap';
+    wrapper.dataset.page = String(index);
+    wrapper.style.width = width + 'px';
+    wrapper.style.height = height + 'px';
+
+    const base = document.createElement('canvas');
+    base.className = 'page-base';
+    base.width = width;
+    base.height = height;
+    base.style.width = width + 'px';
+    base.style.height = height + 'px';
+
+    const ink = document.createElement('canvas');
+    ink.className = 'page-ink';
+    ink.width = width;
+    ink.height = height;
+    ink.style.width = width + 'px';
+    ink.style.height = height + 'px';
+    ink.setAttribute('aria-label', 'Annotation layer for page ' + (index + 1));
+
+    const result = await renderPdfPage(base.getContext('2d'), parsedDocument, index, {
+      scale: desiredScale,
+      resizeCanvas: false,
+    });
+    if (result.warnings.length) {
+      throw new Error('The first-party renderer does not yet support all content on page ' +
+        (index + 1) + ': ' + result.warnings.join(' '));
+    }
+
+    wrapper.append(base, ink);
+    const pageState = {
+      index,
+      pdfPage: { rotate: 0, view: parsedPage.mediaBox },
+      viewport: { width, height, scale: desiredScale },
+      base,
+      ink,
+      ctx: ink.getContext('2d'),
+      width,
+      height,
+      pdfWidth: parsedPage.width,
+      pdfHeight: parsedPage.height,
+      scale: desiredScale,
+    };
+    ink.addEventListener('pointerdown', event => pointerDown(event, pageState));
+    ink.addEventListener('pointermove', event => pointerMove(event, pageState));
+    ink.addEventListener('pointerup', event => pointerUp(event, pageState));
+    ink.addEventListener('pointercancel', event => pointerUp(event, pageState));
+    ink.addEventListener('pointerleave', event => {
+      if (state.interaction && state.interaction.pointerId === event.pointerId) pointerUp(event, pageState);
+    });
+    fragment.append(wrapper);
+    pages.push(pageState);
+  }
+  return { fragment, pages };
 }
 
 async function renderPage(pageNumber) {

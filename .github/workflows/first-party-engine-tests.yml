@@ -25,5 +25,6 @@ jobs:
           node --check app.js
           node --check luxraj-annotation-core.js
           node --check luxraj-pdf-engine.js
+          node --check luxraj-pdf-renderer.js
       - name: Run automated tests
         run: npm test
