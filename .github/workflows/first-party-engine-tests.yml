@@ -2,7 +2,8 @@ name: First-Party Engine Tests
 
 on:
   push:
-    branches: [own-pdf-engine-foundation]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
