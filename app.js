@@ -81,7 +81,7 @@ async function openFile(file) {
   try {
     notify('Opening PDF with the Luxraj renderer…');
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const parsedDocument = parsePdfDocument(bytes);
+    const parsedDocument = await parsePdfDocument(bytes);
     const firstPartyPages = await renderFirstPartyPages(parsedDocument);
 
     state.bytes = bytes;
@@ -284,7 +284,7 @@ async function exportPdf() {
   els.download.textContent = 'Preparing…';
 
   try {
-    const sourceDocument = parsePdfDocument(state.bytes);
+    const sourceDocument = await parsePdfDocument(state.bytes);
     if (sourceDocument.pages.length !== state.pages.length) {
       throw new Error('The page count changed between opening and export.');
     }
@@ -299,8 +299,8 @@ async function exportPdf() {
       return { canvasWidth: page.width, canvasHeight: page.height };
     });
     // Use only the first-party writer; unsupported features fail explicitly.
-    const bytes = addAnnotationsToPdf(state.bytes, state.annotations, { pageMetrics });
-    const verification = parsePdfDocument(bytes);
+    const bytes = await addAnnotationsToPdf(state.bytes, state.annotations, { pageMetrics });
+    const verification = await parsePdfDocument(bytes);
     if (verification.pages.length !== sourceDocument.pages.length) {
       throw new Error('The Luxraj writer produced a different page count.');
     }

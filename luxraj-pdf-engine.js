@@ -588,61 +588,230 @@ function readPdfToken(source, initialOffset) {
   return { token: source.slice(offset, end), offset: end };
 }
 
-function parseClassicXrefSection(source, xrefOffset, seen = new Set(), depth = 0) {
+async function inflatePdfBytes(bytes) {
+  if (typeof DecompressionStream !== 'function' || typeof Blob !== 'function' || typeof Response !== 'function') {
+    throw new Error('This environment does not provide the native stream decompression API required for FlateDecode PDF streams.');
+  }
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function applyPdfPredictor(bytes, parameters = {}) {
+  const predictor = Number(parameters.Predictor ?? 1);
+  if (!Number.isInteger(predictor) || predictor < 1 || predictor > 15) {
+    throw new SyntaxError('Unsupported PDF stream predictor value.');
+  }
+  if (predictor === 1) return bytes;
+  const colors = Number(parameters.Colors ?? 1);
+  const bitsPerComponent = Number(parameters.BitsPerComponent ?? 8);
+  const columns = Number(parameters.Columns ?? 1);
+  if (!Number.isInteger(colors) || colors < 1 || !Number.isInteger(columns) || columns < 1 ||
+      !Number.isInteger(bitsPerComponent) || ![1, 2, 4, 8, 16].includes(bitsPerComponent)) {
+    throw new SyntaxError('Invalid PDF predictor parameters.');
+  }
+  const rowLength = Math.ceil(colors * columns * bitsPerComponent / 8);
+  const bytesPerPixel = Math.max(1, Math.ceil(colors * bitsPerComponent / 8));
+  if (predictor === 2) {
+    if (bitsPerComponent !== 8) throw new SyntaxError('The first-party TIFF predictor currently supports 8-bit components only.');
+    if (bytes.length % rowLength !== 0) throw new SyntaxError('TIFF-predicted stream has an incomplete row.');
+    const output = bytes.slice();
+    for (let rowStart = 0; rowStart < output.length; rowStart += rowLength) {
+      for (let i = bytesPerPixel; i < rowLength; i += 1) {
+        output[rowStart + i] = (output[rowStart + i] + output[rowStart + i - bytesPerPixel]) & 255;
+      }
+    }
+    return output;
+  }
+  if (predictor < 10) throw new SyntaxError('Unsupported PDF predictor.');
+  const outputRows = [];
+  let inputOffset = 0;
+  let previous = new Uint8Array(rowLength);
+  while (inputOffset < bytes.length) {
+    const filter = bytes[inputOffset++];
+    if (filter > 4 || inputOffset + rowLength > bytes.length) throw new SyntaxError('Malformed PNG-predicted PDF stream.');
+    const row = bytes.slice(inputOffset, inputOffset + rowLength);
+    inputOffset += rowLength;
+    for (let i = 0; i < rowLength; i += 1) {
+      const raw = row[i];
+      const left = i >= bytesPerPixel ? row[i - bytesPerPixel] : 0;
+      const up = previous[i] ?? 0;
+      const upperLeft = i >= bytesPerPixel ? previous[i - bytesPerPixel] : 0;
+      if (filter === 1) row[i] = (raw + left) & 255;
+      else if (filter === 2) row[i] = (raw + up) & 255;
+      else if (filter === 3) row[i] = (raw + Math.floor((left + up) / 2)) & 255;
+      else if (filter === 4) {
+        const base = left + up - upperLeft;
+        const leftDistance = Math.abs(base - left);
+        const upDistance = Math.abs(base - up);
+        const upperLeftDistance = Math.abs(base - upperLeft);
+        const nearest = leftDistance <= upDistance && leftDistance <= upperLeftDistance
+          ? left
+          : upDistance <= upperLeftDistance ? up : upperLeft;
+        row[i] = (raw + nearest) & 255;
+      }
+    }
+    outputRows.push(row);
+    previous = row;
+  }
+  const totalLength = outputRows.reduce((sum, row) => sum + row.length, 0);
+  const output = new Uint8Array(totalLength);
+  let outOffset = 0;
+  for (const row of outputRows) {
+    output.set(row, outOffset);
+    outOffset += row.length;
+  }
+  return output;
+}
+
+async function decodePdfStreamBytes(record, objects = new Map()) {
+  if (!(record?.stream instanceof Uint8Array)) throw new SyntaxError('Expected a PDF stream object.');
+  const dictionary = record.value;
+  if (!dictionary || typeof dictionary !== 'object' || Array.isArray(dictionary)) {
+    throw new SyntaxError('PDF stream dictionary is invalid.');
+  }
+  const filterValue = dictionary.Filter === undefined ? null : resolvePdfValue(dictionary.Filter, objects);
+  const filters = filterValue === null ? [] : Array.isArray(filterValue) ? filterValue : [filterValue];
+  const rawParams = dictionary.DecodeParms ?? dictionary.DP ?? null;
+  const resolvedParams = rawParams === null ? null : resolvePdfValue(rawParams, objects);
+  const parameters = resolvedParams === null ? [] : Array.isArray(resolvedParams) ? resolvedParams : [resolvedParams];
+  let output = record.stream.slice();
+  for (let i = 0; i < filters.length; i += 1) {
+    const filter = filters[i];
+    if (!(filter instanceof PdfName)) throw new SyntaxError('Indirect or malformed PDF stream filter is unsupported.');
+    if (filter.value !== 'FlateDecode' && filter.value !== 'Fl') {
+      throw new SyntaxError('The first-party structural reader does not support the /' + filter.value + ' stream filter yet.');
+    }
+    output = await inflatePdfBytes(output);
+    const paramsValue = parameters[i] ?? parameters[0] ?? null;
+    const params = paramsValue === null ? {} : resolvePdfValue(paramsValue, objects);
+    if (params && (typeof params !== 'object' || Array.isArray(params))) {
+      throw new SyntaxError('PDF stream DecodeParms must be a dictionary.');
+    }
+    output = applyPdfPredictor(output, params ?? {});
+  }
+  return output;
+}
+
+async function parseXrefSection(source, xrefOffset, seen = new Set(), depth = 0) {
   if (depth > 32 || seen.has(xrefOffset)) throw new SyntaxError('The PDF cross-reference chain is cyclic or too deep.');
   seen.add(xrefOffset);
-  let offset = skipPdfWhitespace(source, xrefOffset);
-  if (!source.startsWith('xref', offset)) {
-    throw new SyntaxError('This PDF uses an xref stream; this first-party reader currently supports classic xref tables only.');
-  }
-  offset += 4;
+  const offset = skipPdfWhitespace(source, xrefOffset);
   const localEntries = new Map();
   let trailer = null;
 
-  while (offset < source.length) {
-    const tokenResult = readPdfToken(source, offset);
-    offset = tokenResult.offset;
-    if (tokenResult.token === 'trailer') {
-      const parsed = parsePdfValue(source, offset);
-      trailer = parsed.value;
-      offset = parsed.offset;
-      break;
+  if (!source.startsWith('xref', offset)) {
+    const xrefObject = parseIndirectObjectAtOffset(source, offset);
+    if (!pdfNameIs(xrefObject.value?.Type, 'XRef') || !(xrefObject.stream instanceof Uint8Array)) {
+      throw new SyntaxError('The startxref offset does not point to a classic xref table or an xref stream.');
     }
-    if (!/^\d+$/.test(tokenResult.token)) throw new SyntaxError('Invalid classic PDF cross-reference subsection.');
-    const firstObject = Number(tokenResult.token);
-    const countResult = readPdfToken(source, offset);
-    if (!/^\d+$/.test(countResult.token)) throw new SyntaxError('Invalid cross-reference entry count.');
-    const count = Number(countResult.token);
-    offset = countResult.offset;
-    for (let i = 0; i < count; i += 1) {
-      const objectOffset = readPdfToken(source, offset);
-      const generationToken = readPdfToken(source, objectOffset.offset);
-      const statusToken = readPdfToken(source, generationToken.offset);
-      if (!/^\d+$/.test(objectOffset.token) || !/^\d+$/.test(generationToken.token) || !/^[nf]$/.test(statusToken.token)) {
-        throw new SyntaxError('Malformed PDF cross-reference entry.');
+    trailer = xrefObject.value;
+    const widths = trailer.W;
+    if (!Array.isArray(widths) || widths.length !== 3 ||
+        !widths.every((width) => Number.isInteger(width) && width >= 0 && width <= 8)) {
+      throw new SyntaxError('The xref stream has an invalid /W field.');
+    }
+    if (!Number.isInteger(trailer.Size) || trailer.Size < 1) throw new SyntaxError('The xref stream has an invalid /Size field.');
+    const index = trailer.Index ?? [0, trailer.Size];
+    if (!Array.isArray(index) || index.length % 2 !== 0 ||
+        !index.every((value) => Number.isInteger(value) && value >= 0)) {
+      throw new SyntaxError('The xref stream has an invalid /Index field.');
+    }
+    const data = await decodePdfStreamBytes(xrefObject);
+    const rowWidth = widths.reduce((sum, width) => sum + width, 0);
+    if (rowWidth === 0) throw new SyntaxError('The xref stream has empty entry widths.');
+    const entryCount = index.reduce((sum, value, i) => i % 2 === 1 ? sum + value : sum, 0);
+    if (data.length < entryCount * rowWidth) throw new SyntaxError('The xref stream data is shorter than its declared entry count.');
+    let dataOffset = 0;
+    const readField = (width) => {
+      let value = 0;
+      for (let i = 0; i < width; i += 1) value = value * 256 + data[dataOffset++];
+      return value;
+    };
+    for (let range = 0; range < index.length; range += 2) {
+      const firstObject = index[range];
+      const count = index[range + 1];
+      for (let i = 0; i < count; i += 1) {
+        const type = widths[0] === 0 ? 1 : readField(widths[0]);
+        const field2 = readField(widths[1]);
+        const field3 = readField(widths[2]);
+        if (type === 0) {
+          localEntries.set(firstObject + i, { type: 0, offset: field2, generation: field3, inUse: false });
+        } else if (type === 1) {
+          localEntries.set(firstObject + i, { type: 1, offset: field2, generation: field3, inUse: true });
+        } else if (type === 2) {
+          localEntries.set(firstObject + i, {
+            type: 2, offset: 0, generation: 0, inUse: true,
+            objectStreamNumber: field2, objectStreamIndex: field3,
+          });
+        }
       }
-      localEntries.set(firstObject + i, {
-        offset: Number(objectOffset.token),
-        generation: Number(generationToken.token),
-        inUse: statusToken.token === 'n',
-      });
-      offset = statusToken.offset;
+    }
+  } else {
+    let cursor = offset + 4;
+    while (cursor < source.length) {
+      const tokenResult = readPdfToken(source, cursor);
+      cursor = tokenResult.offset;
+      if (tokenResult.token === 'trailer') {
+        const parsed = parsePdfValue(source, cursor);
+        trailer = parsed.value;
+        cursor = parsed.offset;
+        break;
+      }
+      if (!/^\d+$/.test(tokenResult.token)) throw new SyntaxError('Invalid classic PDF cross-reference subsection.');
+      const firstObject = Number(tokenResult.token);
+      const countResult = readPdfToken(source, cursor);
+      if (!/^\d+$/.test(countResult.token)) throw new SyntaxError('Invalid cross-reference entry count.');
+      const count = Number(countResult.token);
+      cursor = countResult.offset;
+      for (let i = 0; i < count; i += 1) {
+        const objectOffset = readPdfToken(source, cursor);
+        const generationToken = readPdfToken(source, objectOffset.offset);
+        const statusToken = readPdfToken(source, generationToken.offset);
+        if (!/^\d+$/.test(objectOffset.token) || !/^\d+$/.test(generationToken.token) || !/^[nf]$/.test(statusToken.token)) {
+          throw new SyntaxError('Malformed PDF cross-reference entry.');
+        }
+        localEntries.set(firstObject + i, {
+          type: statusToken.token === 'n' ? 1 : 0,
+          offset: Number(objectOffset.token),
+          generation: Number(generationToken.token),
+          inUse: statusToken.token === 'n',
+        });
+        cursor = statusToken.offset;
+      }
     }
   }
-
   if (!trailer || typeof trailer !== 'object' || Array.isArray(trailer)) {
     throw new SyntaxError('The PDF has no valid trailer dictionary.');
+  }
+  if (typeof trailer.XRefStm === 'number' && Number.isInteger(trailer.XRefStm) && trailer.XRefStm >= 0) {
+    const hybrid = await parseXrefSection(source, trailer.XRefStm, seen, depth + 1);
+    const mergedEntries = new Map(hybrid.entries);
+    for (const [objectNumber, entry] of localEntries) mergedEntries.set(objectNumber, entry);
+    localEntries.clear();
+    for (const [objectNumber, entry] of mergedEntries) localEntries.set(objectNumber, entry);
+    trailer = { ...hybrid.trailer, ...trailer };
   }
   const previousOffset = trailer.Prev;
   let entries = localEntries;
   let mergedTrailer = trailer;
   if (typeof previousOffset === 'number' && Number.isInteger(previousOffset) && previousOffset >= 0) {
-    const previous = parseClassicXrefSection(source, previousOffset, seen, depth + 1);
+    const previous = await parseXrefSection(source, previousOffset, seen, depth + 1);
     entries = new Map(previous.entries);
     for (const [objectNumber, entry] of localEntries) entries.set(objectNumber, entry);
     mergedTrailer = { ...previous.trailer, ...trailer };
   }
   return { entries, trailer: mergedTrailer };
+}
+
+function parseIndirectObjectAtOffset(source, offset) {
+  const match = /^(\d+)\s+(\d+)\s+obj\b/.exec(source.slice(offset));
+  if (!match) throw new SyntaxError('The xref stream offset does not point to an indirect object.');
+  return parseIndirectObjectAt(source, Number(match[1]), {
+    offset,
+    generation: Number(match[2]),
+    inUse: true,
+    type: 1,
+  });
 }
 
 function parseIndirectObjectAt(source, objectNumber, entry) {
@@ -758,11 +927,12 @@ function collectPdfPages(objects, trailer) {
 }
 
 /**
- * Read PDFs that use classic xref tables, indirect objects, direct-length streams,
- * and ordinary page trees. Object/xref streams, encrypted files, filters, and
- * indirect stream lengths are intentionally rejected until implemented.
+ * Read PDFs using classic xref tables or supported xref streams, indirect
+ * objects, supported compressed object streams, direct-length streams, and
+ * ordinary page trees. Encryption, indirect stream lengths, and unsupported
+ * structural filters are rejected explicitly.
  */
-export function parsePdfDocument(input) {
+export async function parsePdfDocument(input) {
   const bytes = toBytes(input);
   const source = binaryBytesToString(bytes);
   const header = /%PDF-(\d+\.\d+)/.exec(source.slice(0, 1024));
@@ -775,27 +945,87 @@ export function parsePdfDocument(input) {
     throw new SyntaxError('The PDF has no valid startxref offset.');
   }
 
-  const xref = parseClassicXrefSection(source, startXref);
+  const xref = await parseXrefSection(source, startXref);
+  const trailer = { ...xref.trailer };
+  for (const key of ['Type', 'W', 'Index', 'Filter', 'DecodeParms', 'Length', 'XRefStm']) delete trailer[key];
   const objects = new Map();
   const liveEntries = [...xref.entries.entries()]
-    .filter(([objectNumber, entry]) => objectNumber > 0 && entry.inUse && entry.offset > 0)
-    .sort((a, b) => a[1].offset - b[1].offset);
+    .filter(([objectNumber, entry]) => objectNumber > 0 && entry.inUse)
+    .sort((a, b) => (a[1].type === 2 ? 1 : 0) - (b[1].type === 2 ? 1 : 0) || a[1].offset - b[1].offset);
   for (const [objectNumber, entry] of liveEntries) {
-    const object = parseIndirectObjectAt(source, objectNumber, entry);
-    objects.set(objectNumber, object);
+    if (entry.type === 2 || !(entry.offset > 0)) continue;
+    objects.set(objectNumber, parseIndirectObjectAt(source, objectNumber, entry));
   }
 
-  const pages = collectPdfPages(objects, xref.trailer);
+  const compressedEntries = liveEntries.filter(([, entry]) => entry.type === 2);
+  const objectStreamCache = new Map();
+  for (const [objectNumber, entry] of compressedEntries) {
+    let members = objectStreamCache.get(entry.objectStreamNumber);
+    if (!members) {
+      const streamRecord = objects.get(entry.objectStreamNumber);
+      if (!streamRecord || !pdfNameIs(streamRecord.value?.Type, 'ObjStm') ||
+          !(streamRecord.stream instanceof Uint8Array)) {
+        throw new SyntaxError('Compressed object ' + objectNumber + ' references an invalid object stream.');
+      }
+      const streamDictionary = streamRecord.value;
+      if (!Number.isInteger(streamDictionary.N) || streamDictionary.N < 0 ||
+          !Number.isInteger(streamDictionary.First) || streamDictionary.First < 0) {
+        throw new SyntaxError('Object stream ' + entry.objectStreamNumber + ' has invalid /N or /First values.');
+      }
+      const decoded = await decodePdfStreamBytes(streamRecord, objects);
+      if (streamDictionary.First > decoded.length) {
+        throw new SyntaxError('Object stream ' + entry.objectStreamNumber + ' has an invalid /First offset.');
+      }
+      const decodedText = binaryBytesToString(decoded);
+      let headerOffset = 0;
+      const objectHeaders = [];
+      for (let i = 0; i < streamDictionary.N; i += 1) {
+        const numberResult = readPdfToken(decodedText, headerOffset);
+        const offsetResult = readPdfToken(decodedText, numberResult.offset);
+        if (!/^\d+$/.test(numberResult.token) || !/^\d+$/.test(offsetResult.token)) {
+          throw new SyntaxError('Object stream ' + entry.objectStreamNumber + ' has a malformed object index.');
+        }
+        objectHeaders.push({ objectNumber: Number(numberResult.token), offset: Number(offsetResult.token) });
+        headerOffset = offsetResult.offset;
+      }
+      if (headerOffset > streamDictionary.First) {
+        throw new SyntaxError('Object stream ' + entry.objectStreamNumber + ' has overlapping header and object data.');
+      }
+      members = objectHeaders.map((header, memberIndex) => {
+        const valueOffset = streamDictionary.First + header.offset;
+        if (valueOffset < streamDictionary.First || valueOffset >= decodedText.length) {
+          throw new SyntaxError('Object stream ' + entry.objectStreamNumber + ' contains an invalid object offset.');
+        }
+        const parsed = parsePdfValue(decodedText, valueOffset);
+        return { ...header, memberIndex, value: parsed.value };
+      });
+      objectStreamCache.set(entry.objectStreamNumber, members);
+    }
+    const member = members[entry.objectStreamIndex];
+    if (!member || member.objectNumber !== objectNumber) {
+      throw new SyntaxError('Xref entry for compressed object ' + objectNumber + ' does not match its object stream index.');
+    }
+    objects.set(objectNumber, {
+      number: objectNumber,
+      generation: 0,
+      value: member.value,
+      stream: null,
+      compressed: true,
+      objectStreamNumber: entry.objectStreamNumber,
+      objectStreamIndex: entry.objectStreamIndex,
+    });
+  }
+
+  const pages = collectPdfPages(objects, trailer);
   return {
     version: header[1],
-    trailer: xref.trailer,
+    trailer,
     objects,
     pages,
     startXref,
     byteLength: bytes.length,
   };
 }
-
 
 /**
  * Append first-party annotation content to supported existing PDFs without
@@ -806,13 +1036,13 @@ export function parsePdfDocument(input) {
  * annotation coordinates came from a scaled canvas. Page boxes are taken from
  * the parsed PDF, and any non-zero MediaBox origin is accounted for.
  */
-export function addAnnotationsToPdf(input, annotations, { pageMetrics = [] } = {}) {
+export async function addAnnotationsToPdf(input, annotations, { pageMetrics = [] } = {}) {
   if (!Array.isArray(annotations)) throw new TypeError('annotations must be an array.');
   if (!Array.isArray(pageMetrics)) throw new TypeError('pageMetrics must be an array.');
   if (annotations.length === 0) return toBytes(input).slice();
 
   const sourceBytes = toBytes(input);
-  const document = parsePdfDocument(sourceBytes);
+  const document = await parsePdfDocument(sourceBytes);
   if (Object.hasOwn(document.trailer, 'Encrypt')) {
     throw new SyntaxError('Encrypted PDFs are not supported by the first-party writer yet.');
   }
