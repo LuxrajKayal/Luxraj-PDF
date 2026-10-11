@@ -393,7 +393,9 @@ function createRenderState(document, page, baseMatrix, context) {
     ctm: IDENTITY.slice(), stack: [], operands: [],
     fillStyle: '#000000', strokeStyle: '#000000', lineWidth: 1,
     lineCap: 'butt', lineJoin: 'miter', miterLimit: 10, dash: [], dashOffset: 0,
-    alpha: 1, pendingClip: null, currentPoint: { x: 0, y: 0 },
+    alpha: 1, fillAlpha: 1, strokeAlpha: 1, pendingClip: null, currentPoint: { x: 0, y: 0 },
+    fillColorSpace: 'DeviceGray', strokeColorSpace: 'DeviceGray',
+    resources: page.resources, fontCache: new Map(),
     fontName: 'F1', fontSize: 12, fontInfo: null,
     textMatrix: IDENTITY.slice(), textLineMatrix: IDENTITY.slice(),
     charSpace: 0, wordSpace: 0, horizontalScale: 1, leading: 0, rise: 0, textMode: 0,
@@ -422,11 +424,17 @@ function pathPaint(state, operator) {
   applyPendingClip(state);
   if (operator === 'S' || operator === 's' || operator === 'B' || operator === 'B*' || operator === 'b' || operator === 'b*') {
     if (operator === 's' || operator === 'b' || operator === 'b*') context.closePath();
+    const previousAlpha = context.globalAlpha;
+    context.globalAlpha = state.strokeAlpha;
     context.stroke();
+    context.globalAlpha = previousAlpha;
   }
   if (operator === 'f' || operator === 'F' || operator === 'f*' || operator === 'B' || operator === 'B*' || operator === 'b' || operator === 'b*') {
     const rule = operator === 'f*' || operator === 'B*' || operator === 'b*' ? 'evenodd' : 'nonzero';
+    const previousAlpha = context.globalAlpha;
+    context.globalAlpha = state.fillAlpha;
     context.fill(rule);
+    context.globalAlpha = previousAlpha;
   }
   context.beginPath();
 }
@@ -445,7 +453,8 @@ function textAdvance(state, text) {
   return (measured * state.fontSize + text.length * state.charSpace + wordCount * state.wordSpace) * state.horizontalScale;
 }
 
-function drawPdfText(state, text) {
+function drawPdfText(state, rawText) {
+  const text = decodeFontText(rawText, state.fontInfo);
   if (state.textMode === 3 || state.textMode >= 4) {
     if (state.textMode >= 4) state.warnings.add('Text clipping modes are not supported yet.');
     return;
@@ -457,13 +466,23 @@ function drawPdfText(state, text) {
   context.save();
   context.setTransform(...matrix);
   context.font = (info.italic ? 'italic ' : '') + (info.bold ? 'bold ' : '') + '1px ' + info.family;
-  if (state.textMode === 1 || state.textMode === 2 || state.textMode === 5 || state.textMode === 6) context.strokeText(text, 0, 0);
-  if (state.textMode === 0 || state.textMode === 2 || state.textMode === 4 || state.textMode === 6) context.fillText(text, 0, 0);
+  if (state.textMode === 1 || state.textMode === 2 || state.textMode === 5 || state.textMode === 6) {
+    const previousAlpha = context.globalAlpha;
+    context.globalAlpha = state.strokeAlpha;
+    context.strokeText(text, 0, 0);
+    context.globalAlpha = previousAlpha;
+  }
+  if (state.textMode === 0 || state.textMode === 2 || state.textMode === 4 || state.textMode === 6) {
+    const previousAlpha = context.globalAlpha;
+    context.globalAlpha = state.fillAlpha;
+    context.fillText(text, 0, 0);
+    context.globalAlpha = previousAlpha;
+  }
   context.restore();
   state.textMatrix = multiplyMatrix(state.textMatrix, [1, 0, 0, 1, textAdvance(state, text), 0]);
 }
 
-function renderOperator(state, operator, args) {
+async function renderOperator(state, operator, args) {
   const context = state.context;
   const nums = (count) => {
     if (args.length < count || args.slice(-count).some((arg) => arg.type !== 'number')) {
@@ -485,7 +504,9 @@ function renderOperator(state, operator, args) {
         ctm: state.ctm.slice(), fillStyle: state.fillStyle, strokeStyle: state.strokeStyle,
         lineWidth: state.lineWidth, lineCap: state.lineCap, lineJoin: state.lineJoin,
         miterLimit: state.miterLimit, dash: state.dash.slice(), dashOffset: state.dashOffset,
-        alpha: state.alpha, pendingClip: state.pendingClip,
+        alpha: state.alpha, fillAlpha: state.fillAlpha, strokeAlpha: state.strokeAlpha,
+        fillColorSpace: state.fillColorSpace, strokeColorSpace: state.strokeColorSpace,
+        pendingClip: state.pendingClip,
       });
       break;
     case 'Q': {
@@ -594,7 +615,10 @@ function renderOperator(state, operator, args) {
       if (!font || font.type !== 'name' || !size || size.type !== 'number') throw new SyntaxError('Invalid Tf operands.');
       state.fontName = font.value;
       state.fontSize = size.value;
-      state.fontInfo = getFontInfo(state.document, state.page.resources, state.fontName);
+      if (!state.fontCache.has(state.fontName)) {
+        state.fontCache.set(state.fontName, await getFontInfo(state.document, state.resources, state.fontName));
+      }
+      state.fontInfo = state.fontCache.get(state.fontName);
       break;
     }
     case 'Tm': {
@@ -669,7 +693,7 @@ function renderOperator(state, operator, args) {
   }
 }
 
-function runTokens(state, bytes) {
+async function runTokens(state, bytes) {
   const source = bytesToLatin1(bytes);
   const tokens = readContentTokens(source);
   for (const token of tokens) {
@@ -682,7 +706,7 @@ function runTokens(state, bytes) {
     }
     const args = state.operands;
     state.operands = [];
-    renderOperator(state, token.value, args);
+    await renderOperator(state, token.value, args);
   }
 }
 
@@ -743,7 +767,7 @@ export async function renderPdfPage(context, document, pageIndex, options = {}) 
 
   try {
     const streams = await getPageStreamBytes(document, page);
-    for (const stream of streams) runTokens(state, stream);
+    for (const stream of streams) await runTokens(state, stream);
   } finally {
     // Malformed input may leave q operators unbalanced. Do not leak render state to
     // the caller's canvas context, and unwind any saves from the PDF content stream.
