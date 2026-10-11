@@ -1,0 +1,46 @@
+name: Deploy Luxraj Editor
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Validate JavaScript syntax
+        run: |
+          node --check app.js
+          node --check luxraj-annotation-core.js
+      - name: Test first-party annotation library
+        run: npm test
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - name: Upload site files
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: .
+      - name: Deploy site
+        id: deployment
+        uses: actions/deploy-pages@v4
