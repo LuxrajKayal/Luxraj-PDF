@@ -927,9 +927,10 @@ function collectPdfPages(objects, trailer) {
 }
 
 /**
- * Read PDFs that use classic xref tables, indirect objects, direct-length streams,
- * and ordinary page trees. Object/xref streams, encrypted files, filters, and
- * indirect stream lengths are intentionally rejected until implemented.
+ * Read PDFs using classic xref tables or supported xref streams, indirect
+ * objects, supported compressed object streams, direct-length streams, and
+ * ordinary page trees. Encryption, indirect stream lengths, and unsupported
+ * structural filters are rejected explicitly.
  */
 export async function parsePdfDocument(input) {
   const bytes = toBytes(input);
