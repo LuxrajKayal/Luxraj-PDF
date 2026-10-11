@@ -873,20 +873,49 @@ async function renderOperator(state, operator, args) {
       state.textMatrix = state.textLineMatrix.slice();
       drawPdfText(state, text.value); break;
     }
-    case 'Do':
-      state.warnings.add('Image and Form XObjects are not supported yet; some page artwork may be missing.');
+    case 'Do': {
+      const xObject = val(1);
+      if (!xObject || xObject.type !== 'name') throw new SyntaxError('Do expects an XObject name.');
+      await renderImageXObject(state, xObject.value);
       break;
-    case 'gs':
-      state.warnings.add('Extended graphics-state resources are not supported yet.');
+    }
+    case 'gs': {
+      const extState = val(1);
+      if (!extState || extState.type !== 'name') throw new SyntaxError('gs expects an extended graphics-state name.');
+      applyExtendedGraphicsState(state, extState.value);
       break;
+    }
     case 'BI':
       throw new Error('Inline images are not supported by the first-party renderer yet.');
     case 'sh':
       state.warnings.add('Shading fills are not supported yet.');
       break;
-    case 'CS': case 'cs': case 'SC': case 'SCN': case 'sc': case 'scn': case 'ri': case 'i': case 'BX': case 'EX':
-      // Color spaces, rendering intent, flatness, and compatibility markers are no-ops
-      // until their PDF-specific resource semantics are implemented.
+    case 'CS': case 'cs': {
+      const colorSpace = val(1);
+      if (colorSpace && colorSpace.type === 'name') {
+        if (operator === 'CS') state.strokeColorSpace = colorSpace.value;
+        else state.fillColorSpace = colorSpace.value;
+      }
+      break;
+    }
+    case 'SC': case 'SCN': case 'sc': case 'scn':
+      if (operator === 'scn' || operator === 'SCN') {
+        const pattern = args.slice().reverse().find((item) => item.type === 'name');
+        const colorSpace = operator === 'scn' ? state.fillColorSpace : state.strokeColorSpace;
+        if (pattern && colorSpace === 'Pattern') {
+          const style = createShadingPattern(state, pattern.value);
+          if (style) {
+            if (operator === 'scn') setFillStyle(state, style);
+            else setStrokeStyle(state, style);
+          } else {
+            state.warnings.add('Pattern /' + pattern.value + ' is not supported yet.');
+          }
+        }
+      }
+      break;
+    case 'BDC': case 'BMC': case 'EMC': case 'MP': case 'DP':
+    case 'ri': case 'i': case 'BX': case 'EX':
+      // Marked-content tags and compatibility markers do not paint page pixels.
       break;
     default:
       state.warnings.add('Unsupported PDF operator: ' + operator);
@@ -914,7 +943,7 @@ function assertCanvasContext(context) {
   const required = [
     'save', 'restore', 'setTransform', 'transform', 'clearRect', 'fillRect',
     'beginPath', 'moveTo', 'lineTo', 'bezierCurveTo', 'closePath', 'rect',
-    'stroke', 'fill', 'clip', 'fillText', 'strokeText', 'setLineDash',
+    'stroke', 'fill', 'clip', 'fillText', 'strokeText', 'setLineDash', 'drawImage',
   ];
   const missing = required.filter((name) => typeof context?.[name] !== 'function');
   if (missing.length) throw new TypeError('A Canvas 2D context is required; missing: ' + missing.join(', '));
