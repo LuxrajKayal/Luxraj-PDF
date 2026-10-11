@@ -682,7 +682,6 @@ function drawPdfText(state, rawText) {
   state.textMatrix = multiplyMatrix(state.textMatrix, [1, 0, 0, 1, textAdvance(state, text), 0]);
 }
 
-async 
 function evaluatePdfFunction(fn, input) {
   const type = fn?.FunctionType;
   const domain = Array.isArray(fn?.Domain) ? fn.Domain : [0, 1];
