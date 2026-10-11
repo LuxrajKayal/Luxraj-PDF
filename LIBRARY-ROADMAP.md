@@ -50,9 +50,14 @@ The application no longer imports or falls back to PDF.js. It only opens documen
 
 Next: improve coverage through real-document fixtures, especially xref streams, object streams, stream predictors, images and Form XObjects, fonts, clipping, and graphics states. Keep the limitation visible until those cases work.
 
-## v0.8 — Reduce export dependency (in progress)
+## v0.8 — First-party annotation export (current scope implemented)
 
-pdf-lib remains for compatibility export. Remove it only after the first-party writer safely supports the project's target documents and passes regression checks.
+- Removed the pdf-lib compatibility fallback and its CDN import.
+- Export now uses the Luxraj incremental writer only and reports unsupported cases instead of silently passing them to another library.
+- The writer registers PDF transparency graphics states for annotation opacity and encodes common Windows-1252 text using the built-in Helvetica/WinAnsi font.
+- The current engine still supports only a subset of existing PDFs. This milestone replaces the specific annotation-export dependency; it does not claim to reproduce the whole pdf-lib API or all PDF features.
+
+Next: broaden PDF structure support (xref streams, compressed object streams, stream predictors and encryption policy), add proper Unicode font embedding, and test against representative real-world PDFs.
 
 ## Quality rules
 
