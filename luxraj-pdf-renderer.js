@@ -267,7 +267,98 @@ function colorCmyk(values) {
   return colorRgb([(1 - c) * (1 - k), (1 - m) * (1 - k), (1 - y) * (1 - k)]);
 }
 
-function getFontInfo(document, resources, resourceName) {
+function unicodeFromHex(hex) {
+  let result = '';
+  const evenHex = hex.length % 4 ? hex.padStart(Math.ceil(hex.length / 4) * 4, '0') : hex;
+  for (let i = 0; i < evenHex.length; i += 4) {
+    result += String.fromCharCode(parseInt(evenHex.slice(i, i + 4), 16));
+  }
+  return result;
+}
+
+function parseToUnicodeCMap(bytes) {
+  const source = bytesToLatin1(bytes);
+  const map = new Map();
+  const codeLengths = new Set();
+
+  for (const section of source.matchAll(/begincodespacerange([\s\S]*?)endcodespacerange/g)) {
+    for (const pair of section[1].matchAll(/<([0-9a-f]+)>\s*<([0-9a-f]+)>/gi)) {
+      codeLengths.add(pair[1].length / 2);
+    }
+  }
+
+  for (const section of source.matchAll(/\d+\s+beginbfchar([\s\S]*?)endbfchar/g)) {
+    for (const pair of section[1].matchAll(/<([0-9a-f]+)>\s*<([0-9a-f]+)>/gi)) {
+      const key = pair[1].toUpperCase();
+      codeLengths.add(key.length / 2);
+      map.set(key, unicodeFromHex(pair[2]));
+    }
+  }
+
+  for (const section of source.matchAll(/\d+\s+beginbfrange([\s\S]*?)endbfrange/g)) {
+    const rangePattern = /<([0-9a-f]+)>\s*<([0-9a-f]+)>\s*(<([0-9a-f]+)>|\[([\s\S]*?)\])/gi;
+    for (const range of section[1].matchAll(rangePattern)) {
+      const firstHex = range[1].toUpperCase();
+      const lastHex = range[2].toUpperCase();
+      const first = parseInt(firstHex, 16);
+      const last = parseInt(lastHex, 16);
+      const sourceWidth = firstHex.length;
+      codeLengths.add(sourceWidth / 2);
+      if (!Number.isFinite(first) || !Number.isFinite(last) || last < first || last - first > 65535) continue;
+
+      if (range[5] !== undefined) {
+        const destinations = [...range[5].matchAll(/<([0-9a-f]+)>/gi)].map((item) => item[1]);
+        for (let code = first; code <= last; code += 1) {
+          const destination = destinations[code - first];
+          if (destination !== undefined) map.set(code.toString(16).padStart(sourceWidth, '0').toUpperCase(), unicodeFromHex(destination));
+        }
+      } else {
+        const destinationHex = range[4].toUpperCase();
+        const destination = parseInt(destinationHex, 16);
+        for (let code = first; code <= last; code += 1) {
+          const hex = (destination + code - first).toString(16).padStart(destinationHex.length, '0').toUpperCase();
+          map.set(code.toString(16).padStart(sourceWidth, '0').toUpperCase(), unicodeFromHex(hex));
+        }
+      }
+    }
+  }
+
+  return {
+    map,
+    codeLengths: [...codeLengths].filter((length) => Number.isInteger(length) && length > 0).sort((a, b) => b - a),
+  };
+}
+
+function decodeFontText(text, fontInfo) {
+  const cmap = fontInfo?.cmap;
+  if (!cmap || !cmap.map.size) return text;
+  const codeLengths = cmap.codeLengths.length ? cmap.codeLengths : [2];
+  let output = '';
+  let offset = 0;
+  while (offset < text.length) {
+    let found = false;
+    for (const byteLength of codeLengths) {
+      if (offset + byteLength > text.length) continue;
+      let hex = '';
+      for (let i = 0; i < byteLength; i += 1) hex += text.charCodeAt(offset + i).toString(16).padStart(2, '0');
+      hex = hex.toUpperCase();
+      if (cmap.map.has(hex)) {
+        output += cmap.map.get(hex);
+        offset += byteLength;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      const byteLength = codeLengths[0] || 1;
+      output += '\uFFFD';
+      offset += Math.min(byteLength, text.length - offset);
+    }
+  }
+  return output;
+}
+
+async function getFontInfo(document, resources, resourceName) {
   const fontTable = resolveValue(document, resources?.Font);
   const fontDictionary = fontTable && typeof fontTable === 'object' ? resolveValue(document, fontTable[resourceName]) : null;
   const baseFont = fontDictionary?.BaseFont instanceof PdfName ? fontDictionary.BaseFont.value : 'Helvetica';
@@ -276,12 +367,21 @@ function getFontInfo(document, resources, resourceName) {
   const italic = /italic|oblique/i.test(normalized);
   let family = 'Arial';
   if (/courier/i.test(normalized)) family = 'Courier New';
-  else if (/times/i.test(normalized)) family = 'Times New Roman';
+  else if (/times|serif/i.test(normalized)) family = 'Times New Roman';
   else if (/symbol/i.test(normalized)) family = 'serif';
+
+  let cmap = null;
+  const toUnicode = fontDictionary?.ToUnicode;
+  if (toUnicode instanceof PdfReference) {
+    const record = document.objects.get(toUnicode.objectNumber);
+    if (record?.stream instanceof Uint8Array) {
+      cmap = parseToUnicodeCMap(await decodeStream(record.stream, record.value));
+    }
+  }
+  const encoding = fontDictionary?.Encoding instanceof PdfName ? fontDictionary.Encoding.value : '';
   return {
-    family,
-    bold,
-    italic,
+    family, bold, italic, cmap,
+    codeLengths: cmap?.codeLengths?.length ? cmap.codeLengths : [encoding === 'Identity-H' || encoding === 'Identity-V' ? 2 : 1],
     widths: Array.isArray(fontDictionary?.Widths) ? fontDictionary.Widths : null,
     firstChar: typeof fontDictionary?.FirstChar === 'number' ? fontDictionary.FirstChar : 0,
   };
