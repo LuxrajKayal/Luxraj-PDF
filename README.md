@@ -2,9 +2,9 @@
 
 Luxraj Editor is an independently written browser-based PDF annotation workspace. Its first-party `luxraj-annotation-core.js` module implements annotation creation, drawing, geometry, hit-testing, movement, history, and annotation-state serialization.
 
-The repository now also contains `luxraj-pdf-engine.js`, an independently written PDF syntax and minimal PDF-writer foundation. It serializes common PDF values, parses a limited subset of PDF syntax, and creates small new PDFs from supplied page sizes and content operators. It is not yet a general-purpose reader and cannot preserve arbitrary existing PDF files.
+The repository now contains `luxraj-pdf-engine.js`, an independently written PDF-engine foundation. It serializes common PDF values, parses a limited subset of PDF syntax and classic cross-reference tables, reads page boxes and directly sized content streams, converts supported annotations into PDF graphics operators, and creates simple PDF documents.
 
-**The browser editor still uses PDF.js and pdf-lib for its current open/render/export workflow.** Removing those dependencies before our own reader, renderer, and source-preserving writer are complete would break the main workflow. The replacement work is being done incrementally; see [LIBRARY-ROADMAP.md](LIBRARY-ROADMAP.md). No PDF.js or pdf-lib implementation source has been copied into the first-party engine.
+**The browser editor still uses PDF.js and pdf-lib for its current open/render/export workflow.** Removing those dependencies before our own reader, renderer, and source-preserving writer are complete would break the main workflow. The replacement work is being developed incrementally; see [LIBRARY-ROADMAP.md](LIBRARY-ROADMAP.md). No PDF.js or pdf-lib implementation source has been copied into the first-party engine.
 
 ## Run locally
 
@@ -18,29 +18,28 @@ Then open `http://localhost:8000` in your browser.
 
 ## Privacy
 
-PDF files are processed in the browser. The application does not intentionally upload your document to a Luxraj server. The current PDF renderer and writer are fetched from public CDNs. The first-party annotation core and PDF-engine foundation run locally and have no third-party runtime dependencies.
+PDF files are processed in the browser. The application does not intentionally upload your document to a Luxraj server. The current PDF renderer and writer are fetched from public CDNs. The first-party annotation core and PDF-engine modules run locally and have no third-party runtime dependencies.
 
-## Current scope
+## First-party PDF-engine scope
 
-The current app preserves original page content on export by using an external PDF writer. The first-party writer currently creates new basic PDF files only; it does not edit existing files. Complex and rotated pages, forms, encryption, unusual fonts, image decoding, and broad PDF compatibility require further work and testing.
+Implemented in `luxraj-pdf-engine.js`:
 
-## First-party modules
+- PDF syntax value types for names, references, literal strings, and hex strings.
+- Serialization and parsing for common values, arrays, dictionaries, comments, and escaped strings.
+- Creation of new basic PDFs with classic cross-reference tables and caller-supplied content streams.
+- Conversion of supported pen, highlight, rectangle, ellipse, line, arrow, and ASCII-text annotations into PDF drawing operators.
+- Reading classic cross-reference tables, indirect objects, page trees, page boxes, and streams whose `/Length` is a direct number.
+- Automated tests for generated PDF structure, cross-reference offsets, annotation operators, and read-back of generated files.
 
-`luxraj-annotation-core.js` includes:
+Not implemented yet: xref streams, compressed object streams, indirect stream lengths, encrypted PDFs, general stream-filter decoding, font embedding/Unicode mapping, image/XObject rendering, and preserving original page content while editing. The limited first-party reader is not yet connected to the main editor UI and is not a general replacement for PDF.js.
 
-- Annotation creation and color validation
-- Geometry, bounds, hit-testing, canvas drawing, and movement
-- Undo/redo history
-- Annotation-state serialization and validation
+## Current app scope
 
-`luxraj-pdf-engine.js` includes:
+The current app preserves original page content on export through pdf-lib. The first-party writer creates new PDFs; it does not yet overlay annotations onto existing source files while preserving their contents. Complex or rotated pages, forms, encryption, unusual fonts, image decoding, and broad PDF compatibility need more development and testing.
 
-- PDF value types for names, references, literal strings, and hex strings
-- Serialization of common PDF values and dictionaries
-- Parsing of a limited PDF syntax subset
-- A minimal writer for creating new PDF documents from supplied content streams
+## First-party annotation core
 
-These are independent ES modules and can be tested without the browser UI or external PDF libraries.
+`luxraj-annotation-core.js` includes annotation creation and color validation, geometry and hit-testing, canvas drawing, movement, bounded undo/redo, and annotation-state serialization/validation.
 
 ## Tests
 
@@ -54,9 +53,9 @@ npm test
 
 ```text
 index.html                     Browser interface
-app.js                         Browser UI and existing PDF workflow
+app.js                         Browser UI and current PDF workflow
 luxraj-annotation-core.js      First-party annotation library
-luxraj-pdf-engine.js           First-party PDF syntax and minimal writer
+luxraj-pdf-engine.js           First-party PDF syntax, reader, and writer foundation
 styles.css                     Application styles
 tests/                         Automated tests for first-party modules
 LICENSE                        All Rights Reserved for Luxraj-owned original work
