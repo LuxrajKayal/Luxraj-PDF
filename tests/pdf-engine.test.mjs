@@ -8,6 +8,7 @@ import {
   annotationsToPdfContent,
   createAnnotationPdf,
   createPdf,
+  parsePdfDocument,
   parsePdfValue,
   pdfHexString,
   pdfName,
@@ -127,4 +128,27 @@ test('creates annotation-only PDF files with content and validates unsupported U
     [{ type: 'text', pageIndex: 0, text: 'café', points: [{ x: 0, y: 0 }] }],
     { pageWidth: 200, pageHeight: 100 }
   ), /ASCII annotation text only/);
+});
+
+test('reads page boxes and directly sized content streams from a classic-xref PDF', () => {
+  const sourceBytes = createPdf({
+    pages: [
+      { width: 200, height: 100, content: 'q 1 0 0 rg 10 10 30 20 re f Q' },
+      { width: 612, height: 792, content: 'BT /F1 12 Tf 20 700 Td (Second) Tj ET' },
+    ],
+  });
+  const document = parsePdfDocument(sourceBytes);
+  assert.equal(document.version, '1.4');
+  assert.equal(document.pages.length, 2);
+  assert.deepEqual([document.pages[0].width, document.pages[0].height], [200, 100]);
+  assert.deepEqual([document.pages[1].width, document.pages[1].height], [612, 792]);
+  assert.equal(binaryText(document.pages[0].contentStreams[0]), 'q 1 0 0 rg 10 10 30 20 re f Q');
+  assert.equal(binaryText(document.pages[1].contentStreams[0]), 'BT /F1 12 Tf 20 700 Td (Second) Tj ET');
+  assert.equal(document.pages[0].object, 4);
+});
+
+test('rejects unsupported xref-stream PDFs and invalid document data clearly', () => {
+  assert.throws(() => parsePdfDocument(new Uint8Array([1, 2, 3])), /recognizable PDF header/);
+  const xrefStream = new TextEncoder().encode('%PDF-1.5\n1 0 obj << /Type /XRef >>\nstartxref\n10\n%%EOF');
+  assert.throws(() => parsePdfDocument(xrefStream), /xref offset|xref stream/i);
 });
