@@ -21,6 +21,7 @@ jobs:
           node-version: 20
       - name: Validate first-party JavaScript
         run: |
+          node --check app.js
           node --check luxraj-annotation-core.js
           node --check luxraj-pdf-engine.js
       - name: Run automated tests
