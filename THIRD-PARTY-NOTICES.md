@@ -1,7 +1,5 @@
 # Third-party dependency notices
 
-PDF.js has been removed from the Luxraj Editor application. Page reading and rendering now use the first-party Luxraj PDF engine and renderer.
+The current Luxraj Editor runtime does not load PDF.js, pdf-lib, or another third-party JavaScript PDF library. PDF parsing, page rendering, annotation logic, and the supported incremental export path are implemented in the first-party files listed in the README.
 
-- **pdf-lib 1.17.1** — MIT License. Compatibility export for PDFs the Luxraj writer cannot safely handle: https://github.com/Hopding/pdf-lib/blob/master/LICENSE.md
-
-This dependency license applies to pdf-lib, not to Luxraj Editor's separately authored source code. An internet connection is required when the compatibility export library is needed.
+This notice describes the current runtime as inspected; it does not claim that the first-party PDF engine implements every feature of the PDF specification. Add a separate notice and applicable licence details before introducing any third-party runtime dependency.
