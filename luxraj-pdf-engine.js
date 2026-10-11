@@ -67,7 +67,10 @@ function formatNumber(value) {
 }
 
 function serializeName(name) {
-  const bytes = encoder.encode(name.value);
+  if ([...name.value].some((character) => character.charCodeAt(0) > 255)) {
+    throw new RangeError('PDF names must be represented as single-byte name characters.');
+  }
+  const bytes = Uint8Array.from(name.value, (character) => character.charCodeAt(0) & 255);
   let result = '/';
   for (const byte of bytes) {
     const char = String.fromCharCode(byte);
@@ -752,6 +755,132 @@ export function parsePdfDocument(input) {
     trailer: xref.trailer,
     objects,
     pages,
+    startXref,
     byteLength: bytes.length,
   };
+}
+
+
+/**
+ * Append first-party annotation content to supported existing PDFs without
+ * rewriting the original bytes. This incremental writer only accepts files
+ * handled by parsePdfDocument and deliberately rejects encrypted documents.
+ *
+ * pageMetrics is optional; provide [{ canvasWidth, canvasHeight }] when
+ * annotation coordinates came from a scaled canvas. Page boxes are taken from
+ * the parsed PDF, and any non-zero MediaBox origin is accounted for.
+ */
+export function addAnnotationsToPdf(input, annotations, { pageMetrics = [] } = {}) {
+  if (!Array.isArray(annotations)) throw new TypeError('annotations must be an array.');
+  if (!Array.isArray(pageMetrics)) throw new TypeError('pageMetrics must be an array.');
+  if (annotations.length === 0) return toBytes(input).slice();
+
+  const sourceBytes = toBytes(input);
+  const document = parsePdfDocument(sourceBytes);
+  if (Object.hasOwn(document.trailer, 'Encrypt')) {
+    throw new SyntaxError('Encrypted PDFs are not supported by the first-party writer yet.');
+  }
+  if (!Object.hasOwn(document.trailer, 'Root')) throw new SyntaxError('The PDF trailer does not identify a root catalog.');
+  
+  const maximumObjectNumber = Math.max(
+    0,
+    Number(document.trailer.Size ?? 1) - 1,
+    ...document.objects.keys(),
+  );
+  let nextObjectNumber = maximumObjectNumber + 1;
+  const additions = [];
+  const modifiedPages = [];
+
+  for (let pageIndex = 0; pageIndex < document.pages.length; pageIndex += 1) {
+    const page = document.pages[pageIndex];
+    if (!annotations.some((annotation) => annotation.pageIndex === pageIndex)) continue;
+    if (!Number.isInteger(page.object)) throw new SyntaxError('The PDF page is not stored as an indirect object.');
+
+    const metrics = pageMetrics[pageIndex] ?? {};
+    const canvasWidth = metrics.canvasWidth ?? page.width;
+    const canvasHeight = metrics.canvasHeight ?? page.height;
+    const operators = annotationsToPdfContent(annotations, {
+      pageIndex,
+      pageWidth: page.width,
+      pageHeight: page.height,
+      canvasWidth,
+      canvasHeight,
+    });
+    if (!operators) continue;
+
+    const [x0, y0] = page.mediaBox;
+    const translatedOperators = (x0 !== 0 || y0 !== 0)
+      ? `q\n${formatNumber(x0)} ${formatNumber(y0)} cm\n${operators}Q\n`
+      : operators;
+    const streamBytes = encoder.encode(translatedOperators);
+    const streamObjectNumber = nextObjectNumber++;
+    const streamBody = concatBytes([
+      toBytes(`<< /Length ${streamBytes.length} >>\nstream\n`),
+      streamBytes,
+      toBytes('\nendstream'),
+    ]);
+    additions.push({ objectNumber: streamObjectNumber, generation: 0, body: streamBody });
+
+    const existingContents = page.dictionary.Contents;
+    let nextContents;
+    if (existingContents === undefined || existingContents === null) {
+      nextContents = pdfRef(streamObjectNumber);
+    } else if (existingContents instanceof PdfReference) {
+      nextContents = [existingContents, pdfRef(streamObjectNumber)];
+    } else if (Array.isArray(existingContents) && existingContents.every((value) => value instanceof PdfReference)) {
+      nextContents = [...existingContents, pdfRef(streamObjectNumber)];
+    } else {
+      throw new SyntaxError(`Page ${pageIndex + 1} uses an unsupported direct Contents value.`);
+    }
+
+    const updatedDictionary = { ...page.dictionary, Contents: nextContents };
+    const pageRecord = document.objects.get(page.object);
+    if (!pageRecord) throw new SyntaxError(`Cannot find the page object ${page.object}.`);
+    modifiedPages.push({
+      objectNumber: page.object,
+      generation: pageRecord.generation,
+      body: toBytes(serializePdfValue(updatedDictionary)),
+    });
+  }
+
+  if (additions.length === 0) return sourceBytes.slice();
+
+  const modifiedByNumber = new Map();
+  for (const object of additions) modifiedByNumber.set(object.objectNumber, object);
+  for (const object of modifiedPages) modifiedByNumber.set(object.objectNumber, object);
+
+  const prefix = sourceBytes.length && sourceBytes[sourceBytes.length - 1] === 10
+    ? new Uint8Array()
+    : toBytes('\n');
+  const outputParts = [sourceBytes, prefix];
+  let absoluteOffset = sourceBytes.length + prefix.length;
+  const xrefEntries = [];
+
+  const sortedObjects = [...modifiedByNumber.values()].sort((a, b) => a.objectNumber - b.objectNumber);
+  for (const object of sortedObjects) {
+    const header = toBytes(`${object.objectNumber} ${object.generation} obj\n`);
+    const footer = toBytes('\nendobj\n');
+    xrefEntries.push({
+      objectNumber: object.objectNumber,
+      generation: object.generation,
+      offset: absoluteOffset,
+    });
+    outputParts.push(header, object.body, footer);
+    absoluteOffset += header.length + object.body.length + footer.length;
+  }
+
+  const xrefOffset = absoluteOffset;
+  let xrefText = 'xref\n';
+  for (const entry of xrefEntries) {
+    xrefText += `${entry.objectNumber} 1\n${String(entry.offset).padStart(10, '0')} ${String(entry.generation).padStart(5, '0')} n \n`;
+  }
+  const nextTrailer = {
+    ...document.trailer,
+    Size: Math.max(Number(document.trailer.Size ?? 1), nextObjectNumber),
+    Root: document.trailer.Root,
+    Prev: document.startXref,
+  };
+  const trailerText = `trailer\n${serializePdfValue(nextTrailer)}\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  outputParts.push(toBytes(xrefText), toBytes(trailerText));
+  return concatBytes(outputParts);
 }
