@@ -22,6 +22,81 @@ function binaryText(bytes) {
   return Array.from(bytes, (byte) => String.fromCharCode(byte)).join('');
 }
 
+function asciiBytes(value) {
+  return Uint8Array.from(value, (character) => character.charCodeAt(0) & 255);
+}
+
+function concatenateBytes(parts) {
+  const length = parts.reduce((sum, part) => sum + part.length, 0);
+  const output = new Uint8Array(length);
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.length;
+  }
+  return output;
+}
+
+async function deflateBytes(bytes) {
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function createCompressedObjectXrefStreamPdf() {
+  const parts = [asciiBytes('%PDF-1.5\n')];
+  const offsets = new Map();
+  let length = parts[0].length;
+  const append = (bytes) => {
+    parts.push(bytes);
+    length += bytes.length;
+  };
+  const addObject = (number, body) => {
+    offsets.set(number, length);
+    append(asciiBytes(String(number) + ' 0 obj\n'));
+    append(body);
+    append(asciiBytes('\nendobj\n'));
+  };
+  const streamBody = (dictionary, compressed) => concatenateBytes([
+    asciiBytes('<< ' + dictionary + ' /Length ' + compressed.length + ' >>\nstream\n'),
+    compressed,
+    asciiBytes('\nendstream'),
+  ]);
+
+  addObject(1, asciiBytes('<< /Type /Catalog /Pages 2 0 R >>'));
+  addObject(3, asciiBytes('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R >>'));
+  addObject(4, asciiBytes('<< /Length 0 >>\nstream\n\nendstream'));
+
+  const objectStreamBytes = asciiBytes('2 0 << /Type /Pages /Kids [3 0 R] /Count 1 >>');
+  const compressedObjectStream = await deflateBytes(objectStreamBytes);
+  addObject(5, streamBody('/Type /ObjStm /N 1 /First 4 /Filter /FlateDecode', compressedObjectStream));
+
+  const xrefOffset = length;
+  const rows = [];
+  const addEntry = (type, field2, field3) => {
+    const row = [type];
+    for (let shift = 24; shift >= 0; shift -= 8) row.push((Math.floor(field2 / (2 ** shift))) & 255);
+    row.push((Math.floor(field3 / 256)) & 255, field3 & 255);
+    rows.push(row);
+  };
+  addEntry(0, 0, 65535);
+  addEntry(1, offsets.get(1), 0);
+  addEntry(2, 5, 0);
+  addEntry(1, offsets.get(3), 0);
+  addEntry(1, offsets.get(4), 0);
+  addEntry(1, offsets.get(5), 0);
+  addEntry(1, xrefOffset, 0);
+  const predictorBytes = [];
+  for (const row of rows) predictorBytes.push(0, ...row); // PNG predictor 12, filter None per row.
+  const compressedXref = await deflateBytes(Uint8Array.from(predictorBytes));
+  const xrefBody = streamBody(
+    '/Type /XRef /Size 7 /Root 1 0 R /W [1 4 2] /Index [0 7] /Filter /FlateDecode /DecodeParms << /Predictor 12 /Colors 1 /BitsPerComponent 8 /Columns 7 >>',
+    compressedXref,
+  );
+  addObject(6, xrefBody);
+  append(asciiBytes('\nstartxref\n' + xrefOffset + '\n%%EOF\n'));
+  return concatenateBytes(parts);
+}
+
 test('serializes PDF names, references, strings, arrays, and dictionaries', () => {
   const value = {
     Type: pdfName('Page'),
@@ -148,10 +223,20 @@ test('reads page boxes and directly sized content streams from a classic-xref PD
   assert.equal(document.pages[0].object, 4);
 });
 
-test('rejects unsupported xref-stream PDFs and invalid document data clearly', async () => {
+test('reads Flate-compressed xref streams, PNG predictors, and compressed object streams', async () => {
+  const bytes = await createCompressedObjectXrefStreamPdf();
+  const document = await parsePdfDocument(bytes);
+  assert.equal(document.version, '1.5');
+  assert.equal(document.pages.length, 1);
+  assert.deepEqual([document.pages[0].width, document.pages[0].height], [200, 100]);
+  assert.equal(document.trailer.Root.objectNumber, 1);
+  assert.equal(document.objects.get(2).compressed, true);
+  assert.equal(document.objects.get(2).value.Type.value, 'Pages');
+  assert.equal(document.pages[0].object, 3);
+});
+
+test('rejects invalid document data clearly', async () => {
   await assert.rejects(() => parsePdfDocument(new Uint8Array([1, 2, 3])), /recognizable PDF header/);
-  const xrefStream = new TextEncoder().encode('%PDF-1.5\n1 0 obj << /Type /XRef >>\nstartxref\n10\n%%EOF');
-  await assert.rejects(() => parsePdfDocument(xrefStream), /xref offset|xref stream/i);
 });
 
 test('appends annotations while isolating their graphics state from the original page streams', async () => {
