@@ -40,7 +40,21 @@ function createFlatePdf(content) {
 
 class RecordingCanvasContext {
   constructor() {
-    this.canvas = { width: 0, height: 0 };
+    this.canvas = {
+      width: 0,
+      height: 0,
+      ownerDocument: {
+        createElement: () => ({
+          width: 0,
+          height: 0,
+          getContext: () => ({
+            createImageData(width, height) { return { data: new Uint8ClampedArray(width * height * 4) }; },
+            putImageData(imageData) { this.lastImageData = imageData; },
+            drawImage() {},
+          }),
+        }),
+      },
+    };
     this.calls = [];
     this.fillStyle = '#000000';
     this.strokeStyle = '#000000';
@@ -59,8 +73,14 @@ class RecordingCanvasContext {
   bezierCurveTo(...args) { this.record('bezierCurveTo', ...args); }
   closePath(...args) { this.record('closePath', ...args); }
   rect(...args) { this.record('rect', ...args); }
-  stroke(...args) { this.record('stroke', ...args); }
-  fill(...args) { this.record('fill', ...args); }
+  stroke(...args) {
+    this.record('stroke', ...args);
+    this.calls[this.calls.length - 1].alpha = this.globalAlpha ?? 1;
+  }
+  fill(...args) {
+    this.record('fill', ...args);
+    this.calls[this.calls.length - 1].alpha = this.globalAlpha ?? 1;
+  }
   clip(...args) { this.record('clip', ...args); }
   fillText(...args) { this.record('fillText', ...args); }
   strokeText(...args) { this.record('strokeText', ...args); }
@@ -274,5 +294,61 @@ test('uses a Type0 font ToUnicode map when drawing text', async () => {
   const result = await renderPdfPage(context, document, 0);
 
   assert.deepEqual(context.calls.find((call) => call.name === 'fillText').args, ['AB€', 0, 0]);
+  assert.deepEqual(result.warnings, []);
+});
+
+
+test('applies ExtGState fill and stroke alpha independently', async () => {
+  const source = createPdf({
+    pages: [{
+      width: 100,
+      height: 100,
+      resources: {
+        ExtGState: {
+          GS1: { Type: pdfName('ExtGState'), ca: 0.25, CA: 0.5, BM: pdfName('Normal') },
+        },
+      },
+      content: 'q /GS1 gs 1 0 0 rg 10 10 20 20 re f 0 0 1 RG 2 w 0 0 m 30 30 l S Q',
+    }],
+  });
+  const document = parsePdfDocument(source);
+  const context = new RecordingCanvasContext();
+
+  const result = await renderPdfPage(context, document, 0);
+
+  assert.equal(context.calls.find((call) => call.name === 'fill').alpha, 0.25);
+  assert.equal(context.calls.find((call) => call.name === 'stroke').alpha, 0.5);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('renders an ICCBased image XObject with an 8-bit soft mask', async () => {
+  const content = 'q 20 0 0 20 10 10 cm /Im1 Do Q';
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [6 0 R] /Count 1 >>',
+    Buffer.concat([
+      Buffer.from('<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace [/ICCBased 5 0 R] /BitsPerComponent 8 /SMask 4 0 R /Length 3 >>\nstream\n', 'latin1'),
+      Buffer.from([255, 0, 0]),
+      Buffer.from('\nendstream', 'latin1'),
+    ]),
+    Buffer.concat([
+      Buffer.from('<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n', 'latin1'),
+      Buffer.from([128]),
+      Buffer.from('\nendstream', 'latin1'),
+    ]),
+    Buffer.from('<< /N 3 /Alternate /DeviceRGB /Length 0 >>\nstream\n\nendstream', 'latin1'),
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im1 3 0 R >> >> /Contents 7 0 R >>',
+    Buffer.concat([
+      Buffer.from('<< /Length ' + Buffer.byteLength(content, 'latin1') + ' >>\nstream\n', 'latin1'),
+      Buffer.from(content, 'latin1'),
+      Buffer.from('\nendstream', 'latin1'),
+    ]),
+  ];
+  const document = parsePdfDocument(createClassicPdf(objects));
+  const context = new RecordingCanvasContext();
+
+  const result = await renderPdfPage(context, document, 0);
+
+  assert.ok(context.calls.some((call) => call.name === 'drawImage'));
   assert.deepEqual(result.warnings, []);
 });
