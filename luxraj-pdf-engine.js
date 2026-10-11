@@ -368,15 +368,20 @@ export function createPdf({ pages = [] } = {}) {
 }
 
 
-function pdfRgb(hex, pale = false) {
+function pdfRgb(hex, alpha = 1) {
   const input = typeof hex === 'string' ? hex.trim().replace(/^#/, '') : '';
   if (!/^(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(input)) {
     throw new TypeError('Annotation color must be a 3- or 6-digit hex value.');
   }
+  if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) {
+    throw new TypeError('Color alpha must be between 0 and 1.');
+  }
   let raw = input;
   if (raw.length === 3) raw = [...raw].map((char) => char + char).join('');
   const channels = [0, 2, 4].map((offset) => parseInt(raw.slice(offset, offset + 2), 16) / 255);
-  const values = pale ? channels.map((channel) => channel * 0.22 + 0.78) : channels;
+  // The annotation-only helper approximates alpha against white. Existing-document
+  // export uses a real PDF ExtGState transparency resource.
+  const values = alpha < 1 ? channels.map((channel) => channel * alpha + (1 - alpha)) : channels;
   return values.map(formatNumber).join(' ');
 }
 
@@ -390,14 +395,30 @@ function contentPoint(point, context) {
   };
 }
 
+const WIN_ANSI_SPECIAL_CHARACTERS = Object.freeze({
+  0x20AC: 0x80, 0x201A: 0x82, 0x0192: 0x83, 0x201E: 0x84,
+  0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87, 0x02C6: 0x88,
+  0x2030: 0x89, 0x0160: 0x8A, 0x2039: 0x8B, 0x0152: 0x8C,
+  0x017D: 0x8E, 0x2018: 0x91, 0x2019: 0x92, 0x201C: 0x93,
+  0x201D: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97,
+  0x02DC: 0x98, 0x2122: 0x99, 0x0161: 0x9A, 0x203A: 0x9B,
+  0x0153: 0x9C, 0x017E: 0x9E, 0x0178: 0x9F,
+});
+
 function pdfTextLiteral(text) {
   const value = String(text ?? '');
-  // The initial writer uses the built-in Helvetica/WinAnsi font, so avoid silently
-  // corrupting characters that require a Unicode font or ToUnicode map.
-  if (/[^\x20-\x7E]/.test(value)) {
-    throw new RangeError('The first-party PDF writer currently supports ASCII annotation text only.');
+  const bytes = [];
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if ((codePoint >= 0x20 && codePoint <= 0x7E) || (codePoint >= 0xA0 && codePoint <= 0xFF)) {
+      bytes.push(codePoint);
+    } else if (Object.hasOwn(WIN_ANSI_SPECIAL_CHARACTERS, codePoint)) {
+      bytes.push(WIN_ANSI_SPECIAL_CHARACTERS[codePoint]);
+    } else {
+      throw new RangeError('The first-party PDF writer supports ASCII and Windows-1252 text only; this character needs an embedded Unicode font.');
+    }
   }
-  return serializePdfValue(new PdfString(value));
+  return serializePdfValue(new PdfString(new Uint8Array(bytes)));
 }
 
 /**
@@ -430,9 +451,19 @@ export function annotationsToPdfContent(annotations, options = {}) {
     const lineWidth = Math.max(0.1, Number(annotation.thickness ?? 1) * (context.scaleX + context.scaleY) / 2);
     if (!Number.isFinite(lineWidth)) throw new TypeError('Annotation thickness must be finite.');
     const highlight = annotation.type === 'highlight';
-    const strokeColor = pdfRgb(annotation.color ?? '#2563eb', highlight);
-    const fillColor = pdfRgb(annotation.color ?? '#2563eb', highlight);
-    commands.push('q', `${strokeColor} RG`, `${fillColor} rg`, `${formatNumber(highlight ? Math.max(12, Number(annotation.thickness ?? 1) * 4) * (context.scaleX + context.scaleY) / 2 : lineWidth)} w`, '1 J', '1 j');
+    const opacity = Number(annotation.opacity ?? (highlight ? 0.33 : 1));
+    if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) {
+      throw new TypeError('Annotation opacity must be between 0 and 1.');
+    }
+    const graphicsStateName = options.graphicsStateNames?.[opacity.toFixed(3)];
+    const colorAlpha = graphicsStateName ? 1 : opacity;
+    const strokeColor = pdfRgb(annotation.color ?? '#2563eb', colorAlpha);
+    const fillColor = pdfRgb(annotation.color ?? '#2563eb', colorAlpha);
+    commands.push('q');
+    if (opacity < 1 && graphicsStateName) commands.push(`/${graphicsStateName} gs`);
+    commands.push(`${strokeColor} RG`, `${fillColor} rg`,
+      `${formatNumber(highlight ? Math.max(12, Number(annotation.thickness ?? 1) * 4) * (context.scaleX + context.scaleY) / 2 : lineWidth)} w`,
+      '1 J', '1 j');
 
     if (annotation.type === 'pen' || highlight) {
       if (points.length > 1) {
@@ -841,6 +872,55 @@ export function addAnnotationsToPdf(input, annotations, { pageMetrics = [] } = {
     });
   }
 
+  const extGStateDictionaryForPage = (page) => {
+    const resources = page.resources;
+    if (resources === null || resources === undefined) return {};
+    if (!resources || typeof resources !== 'object' || Array.isArray(resources)) {
+      throw new SyntaxError('Page resources must be a dictionary before adding transparency.');
+    }
+    if (resources.ExtGState === null || resources.ExtGState === undefined) return {};
+    const states = resolvePdfValue(resources.ExtGState, document.objects);
+    if (!states || typeof states !== 'object' || Array.isArray(states)) {
+      throw new SyntaxError('Page graphics-state resources must be a dictionary.');
+    }
+    return states;
+  };
+
+  // Register each distinct opacity once, avoiding names already used by the source PDF.
+  const opacityValues = new Map();
+  for (const annotation of annotations) {
+    if (!annotation || !Number.isInteger(annotation.pageIndex) || annotation.pageIndex < 0 || annotation.pageIndex >= document.pages.length) {
+      throw new RangeError('Every annotation must reference an existing PDF page.');
+    }
+    const isHighlight = annotation.type === 'highlight';
+    const requestedOpacity = Number(annotation.opacity ?? (isHighlight ? 0.33 : 1));
+    if (!Number.isFinite(requestedOpacity) || requestedOpacity < 0 || requestedOpacity > 1) {
+      throw new TypeError('Annotation opacity must be between 0 and 1.');
+    }
+    const normalizedOpacity = Number(requestedOpacity.toFixed(3));
+    if (normalizedOpacity < 1) opacityValues.set(normalizedOpacity.toFixed(3), normalizedOpacity);
+  }
+
+  const graphicsStateNames = Object.create(null);
+  const graphicsStateReferences = new Map();
+  for (const [opacityKey, opacity] of opacityValues) {
+    const baseName = `LuxrajAlpha${Math.round(opacity * 1000)}`;
+    let resourceName = baseName;
+    let suffix = 1;
+    while (document.pages.some((page) => Object.hasOwn(extGStateDictionaryForPage(page), resourceName))) {
+      resourceName = `${baseName}_${suffix++}`;
+    }
+    const objectNumber = nextObjectNumber++;
+    const reference = pdfRef(objectNumber);
+    graphicsStateNames[opacityKey] = resourceName;
+    graphicsStateReferences.set(resourceName, reference);
+    additions.push({
+      objectNumber,
+      generation: 0,
+      body: toBytes(serializePdfValue({ Type: pdfName('ExtGState'), ca: opacity, CA: opacity })),
+    });
+  }
+
   for (let pageIndex = 0; pageIndex < document.pages.length; pageIndex += 1) {
     const page = document.pages[pageIndex];
     if (!annotations.some((annotation) => annotation.pageIndex === pageIndex)) continue;
@@ -856,6 +936,7 @@ export function addAnnotationsToPdf(input, annotations, { pageMetrics = [] } = {
       canvasWidth,
       canvasHeight,
       fontResourceName: textFontResourceName,
+      graphicsStateNames,
     });
     if (!operators) continue;
 
@@ -907,14 +988,26 @@ export function addAnnotationsToPdf(input, annotations, { pageMetrics = [] } = {
       Array.isArray(annotation.points) &&
       annotation.points.length > 0
     );
-    if (pageHasText) {
-      if (!textFontReference) throw new SyntaxError('Text font object was not prepared for this page.');
+    const pageHasTransparency = annotations.some((annotation) => {
+      if (annotation.pageIndex !== pageIndex) return false;
+      const isHighlight = annotation.type === 'highlight';
+      return Number(Number(annotation.opacity ?? (isHighlight ? 0.33 : 1)).toFixed(3)) < 1;
+    });
+    if (pageHasText || pageHasTransparency) {
       const existingResources = page.resources ?? {};
-      const existingFonts = fontDictionaryForPage(page);
-      updatedDictionary.Resources = {
-        ...existingResources,
-        Font: { ...existingFonts, [textFontResourceName]: textFontReference },
-      };
+      const updatedResources = { ...existingResources };
+      if (pageHasText) {
+        if (!textFontReference) throw new SyntaxError('Text font object was not prepared for this page.');
+        const existingFonts = fontDictionaryForPage(page);
+        updatedResources.Font = { ...existingFonts, [textFontResourceName]: textFontReference };
+      }
+      if (pageHasTransparency) {
+        updatedResources.ExtGState = {
+          ...extGStateDictionaryForPage(page),
+          ...Object.fromEntries(graphicsStateReferences),
+        };
+      }
+      updatedDictionary.Resources = updatedResources;
     }
     const pageRecord = document.objects.get(page.object);
     if (!pageRecord) throw new SyntaxError(`Cannot find the page object ${page.object}.`);
