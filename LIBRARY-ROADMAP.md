@@ -38,6 +38,7 @@ File: `luxraj-pdf-engine.js`
 - Preserve original input bytes rather than rewriting the existing objects
 - Tests verify original page content streams remain unchanged and the resulting page tree/content references can be read back
 - Current limitations: the source PDF must be parseable by the first-party reader; rotated/cropped page transforms, encryption, complex structure, and some annotation types need additional handling
+- The live app export path currently uses a transparent PNG overlay embedded by pdf-lib instead, to ensure the exported output matches the live coordinate space while this engine matures
 
 ## v0.6 — First-party page renderer (next)
 
@@ -45,7 +46,7 @@ Implement a tested PDF drawing-operator subset and build up text, paths, images,
 
 ## v1.0 — Remove external PDF-engine dependencies (future target)
 
-The app currently uses PDF.js to read/render pages and dynamically loads pdf-lib only as a temporary export fallback. Only after our own reader, renderer, and source-preserving writer pass fixture-based validation should the app stop loading those libraries. Their notices must remain accurate until they are no longer used.
+The app currently uses PDF.js to read/render pages and dynamically loads pdf-lib on export to embed a transparent annotation PNG over each target page. Only after our own reader, renderer, source-preserving writer, and PNG image embedding pass fixture-based validation should the app stop loading those libraries. Their notices must remain accurate until they are no longer used.
 
 ## Quality and ownership rules
 
