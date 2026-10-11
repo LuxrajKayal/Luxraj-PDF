@@ -252,6 +252,206 @@ async function getPageStreamBytes(document, page) {
   return streams;
 }
 
+
+function imageColorSpace(document, value) {
+  const colorSpace = resolveValue(document, value);
+  if (colorSpace instanceof PdfName) {
+    if (colorSpace.value === 'DeviceGray' || colorSpace.value === 'G') return { kind: 'gray', components: 1 };
+    if (colorSpace.value === 'DeviceRGB' || colorSpace.value === 'RGB') return { kind: 'rgb', components: 3 };
+    if (colorSpace.value === 'DeviceCMYK' || colorSpace.value === 'CMYK') return { kind: 'cmyk', components: 4 };
+  }
+  if (Array.isArray(colorSpace) && colorSpace[0] instanceof PdfName) {
+    if (colorSpace[0].value === 'ICCBased') {
+      const profile = resolveValue(document, colorSpace[1]);
+      const components = Number(profile?.N);
+      if (components === 1) return { kind: 'gray', components: 1 };
+      if (components === 3) return { kind: 'rgb', components: 3 };
+      if (components === 4) return { kind: 'cmyk', components: 4 };
+    }
+    if (colorSpace[0].value === 'Indexed') {
+      throw new Error('Indexed PDF image color spaces are not supported by the first-party renderer yet.');
+    }
+  }
+  throw new Error('This PDF image color space is not supported by the first-party renderer yet.');
+}
+
+function getPackedSample(bytes, byteOffset, bitOffset, bitsPerComponent) {
+  if (bitsPerComponent === 8) return bytes[byteOffset + bitOffset] / 255;
+  if (bitsPerComponent === 16) {
+    const offset = byteOffset + bitOffset * 2;
+    return ((bytes[offset] << 8) | bytes[offset + 1]) / 65535;
+  }
+  const startBit = bitOffset * bitsPerComponent;
+  let value = 0;
+  for (let bit = 0; bit < bitsPerComponent; bit += 1) {
+    const pos = startBit + bit;
+    value = (value << 1) | ((bytes[byteOffset + Math.floor(pos / 8)] >> (7 - (pos % 8))) & 1);
+  }
+  return value / ((1 << bitsPerComponent) - 1);
+}
+
+function unpackImageSamples(bytes, width, height, components, bitsPerComponent) {
+  if (![1, 2, 4, 8, 16].includes(bitsPerComponent)) {
+    throw new Error('Image bit depth ' + bitsPerComponent + ' is not supported by the first-party renderer yet.');
+  }
+  const rowBytes = Math.ceil(width * components * bitsPerComponent / 8);
+  const samples = new Array(width * height * components);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      for (let component = 0; component < components; component += 1) {
+        const bitSampleOffset = x * components + component;
+        samples[(y * width + x) * components + component] =
+          getPackedSample(bytes, y * rowBytes, bitSampleOffset, bitsPerComponent);
+      }
+    }
+  }
+  return samples;
+}
+
+function applyDecodeRange(value, decode, component) {
+  if (!Array.isArray(decode) || decode.length < component * 2 + 2) return value;
+  const low = decode[component * 2], high = decode[component * 2 + 1];
+  if (typeof low !== 'number' || typeof high !== 'number') return value;
+  return Math.max(0, Math.min(1, low + value * (high - low)));
+}
+
+async function readSoftMask(document, maskReference, width, height) {
+  if (!(maskReference instanceof PdfReference)) throw new Error('Direct PDF soft masks are not supported.');
+  const record = document.objects.get(maskReference.objectNumber);
+  if (!record || !(record.stream instanceof Uint8Array)) throw new Error('PDF soft-mask image stream is missing.');
+  const dict = record.value;
+  if (Number(dict.Width) !== width || Number(dict.Height) !== height) {
+    throw new Error('Soft masks with dimensions different from the image are not supported yet.');
+  }
+  if (Number(dict.BitsPerComponent) !== 8) throw new Error('Soft-mask bit depths other than 8 are not supported yet.');
+  const decoded = await decodeStream(record.stream, dict);
+  const samples = unpackImageSamples(decoded, width, height, 1, 8);
+  return samples.map((value, index) => Math.round(applyDecodeRange(value, dict.Decode, 0) * 255));
+}
+
+async function imageObjectToCanvas(state, objectReference, objectDictionary) {
+  if (!(objectReference instanceof PdfReference)) throw new Error('Direct PDF image XObjects are not supported.');
+  const record = state.document.objects.get(objectReference.objectNumber);
+  if (!record || !(record.stream instanceof Uint8Array)) throw new Error('PDF image XObject stream is missing.');
+
+  const width = Number(objectDictionary.Width);
+  const height = Number(objectDictionary.Height);
+  const bitsPerComponent = Number(objectDictionary.BitsPerComponent);
+  if (!Number.isInteger(width) || width < 1 || !Number.isInteger(height) || height < 1 ||
+      width > 12000 || height > 12000 || width * height > 40000000) {
+    throw new Error('This PDF image has unsupported dimensions.');
+  }
+
+  let sampleBytes;
+  const filters = filterNames(objectDictionary.Filter);
+  if (filters.some((filter) => filter === 'DCTDecode' || filter === 'DCT')) {
+    if (typeof createImageBitmap !== 'function' || typeof Blob !== 'function') {
+      throw new Error('JPEG PDF image decoding is not available in this browser.');
+    }
+    const bitmap = await createImageBitmap(new Blob([record.stream], { type: 'image/jpeg' }));
+    const scratch = state.context.canvas?.ownerDocument?.createElement('canvas') ?? globalThis.document?.createElement('canvas');
+    if (!scratch) throw new Error('A browser canvas is required to decode this PDF image.');
+    scratch.width = width;
+    scratch.height = height;
+    const scratchContext = scratch.getContext('2d');
+    scratchContext.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close?.();
+    const imageData = scratchContext.getImageData(0, 0, width, height);
+    if (objectDictionary.SMask instanceof PdfReference) {
+      const alpha = await readSoftMask(state.document, objectDictionary.SMask, width, height);
+      for (let i = 0; i < alpha.length; i += 1) imageData.data[i * 4 + 3] = alpha[i];
+      scratchContext.putImageData(imageData, 0, 0);
+    }
+    return scratch;
+  }
+
+  sampleBytes = await decodeStream(record.stream, objectDictionary);
+  const color = imageColorSpace(state.document, objectDictionary.ColorSpace);
+  const components = color.components;
+  const samples = unpackImageSamples(sampleBytes, width, height, components, bitsPerComponent);
+  const decode = objectDictionary.Decode;
+  const imageMask = objectDictionary.ImageMask === true;
+  const alpha = objectDictionary.SMask instanceof PdfReference
+    ? await readSoftMask(state.document, objectDictionary.SMask, width, height)
+    : null;
+
+  const scratch = state.context.canvas?.ownerDocument?.createElement('canvas') ?? globalThis.document?.createElement('canvas');
+  if (!scratch) throw new Error('A browser canvas is required to draw PDF image XObjects.');
+  scratch.width = width;
+  scratch.height = height;
+  const scratchContext = scratch.getContext('2d');
+  const imageData = scratchContext.createImageData(width, height);
+  const max = (1 << bitsPerComponent) - 1;
+  for (let pixel = 0; pixel < width * height; pixel += 1) {
+    const offset = pixel * components;
+    const componentValues = [];
+    for (let component = 0; component < components; component += 1) {
+      componentValues.push(applyDecodeRange(samples[offset + component], decode, component));
+    }
+    let red, green, blue;
+    if (imageMask) {
+      red = green = blue = 0;
+    } else if (color.kind === 'gray') {
+      red = green = blue = componentValues[0];
+    } else if (color.kind === 'rgb') {
+      [red, green, blue] = componentValues;
+    } else {
+      const [c, m, y, k] = componentValues;
+      red = (1 - c) * (1 - k);
+      green = (1 - m) * (1 - k);
+      blue = (1 - y) * (1 - k);
+    }
+    const target = pixel * 4;
+    imageData.data[target] = Math.round(Math.max(0, Math.min(1, red)) * 255);
+    imageData.data[target + 1] = Math.round(Math.max(0, Math.min(1, green)) * 255);
+    imageData.data[target + 2] = Math.round(Math.max(0, Math.min(1, blue)) * 255);
+    imageData.data[target + 3] = alpha ? alpha[pixel] : imageMask ? Math.round((1 - samples[pixel]) * 255) : 255;
+  }
+  scratchContext.putImageData(imageData, 0, 0);
+  return scratch;
+}
+
+async function renderImageXObject(state, name) {
+  const xobjects = resolveValue(state.document, state.resources?.XObject);
+  const reference = xobjects && typeof xobjects === 'object' ? xobjects[name] : null;
+  const objectDictionary = resolveValue(state.document, reference);
+  if (!objectDictionary || typeof objectDictionary !== 'object') {
+    state.warnings.add('An unresolved XObject /' + name + ' was skipped.');
+    return;
+  }
+  if (!(objectDictionary.Subtype instanceof PdfName) || objectDictionary.Subtype.value !== 'Image') {
+    state.warnings.add('Form XObjects are not supported yet; some page artwork may be missing.');
+    return;
+  }
+  const scratch = await imageObjectToCanvas(state, reference, objectDictionary);
+  state.context.save();
+  state.context.transform(1, 0, 0, -1, 0, 1);
+  state.context.drawImage(scratch, 0, 0, 1, 1);
+  state.context.restore();
+}
+
+function applyExtendedGraphicsState(state, name) {
+  const table = resolveValue(state.document, state.resources?.ExtGState);
+  const value = table && typeof table === 'object' ? table[name] : null;
+  const dictionary = resolveValue(state.document, value);
+  if (!dictionary || typeof dictionary !== 'object') {
+    state.warnings.add('Extended graphics state /' + name + ' could not be resolved.');
+    return;
+  }
+  if (typeof dictionary.ca === 'number') state.fillAlpha = Math.max(0, Math.min(1, dictionary.ca));
+  if (typeof dictionary.CA === 'number') state.strokeAlpha = Math.max(0, Math.min(1, dictionary.CA));
+  if (typeof dictionary.LW === 'number') {
+    state.lineWidth = Math.max(0.1, dictionary.LW);
+    state.context.lineWidth = state.lineWidth;
+  }
+  if (dictionary.BM instanceof PdfName && dictionary.BM.value !== 'Normal' && dictionary.BM.value !== 'Compatible') {
+    state.warnings.add('Blend mode /' + dictionary.BM.value + ' is not supported yet.');
+  }
+  if (dictionary.SMask instanceof PdfName && dictionary.SMask.value !== 'None') {
+    state.warnings.add('Soft-mask graphics states are not supported yet.');
+  }
+}
+
 function colorGray(value) {
   const channel = Math.max(0, Math.min(1, value));
   return 'rgb(' + Math.round(channel * 255) + ',' + Math.round(channel * 255) + ',' + Math.round(channel * 255) + ')';
