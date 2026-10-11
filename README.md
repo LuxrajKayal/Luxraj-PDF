@@ -1,12 +1,14 @@
 # Luxraj Editor
 
-Luxraj Editor is an independently written browser-based PDF annotation workspace. Its first-party `luxraj-annotation-core.js` module implements annotation creation, drawing, geometry, selection hit-testing, movement, undo/redo history, and annotation-state serialization. This module has no third-party runtime dependencies.
+Luxraj Editor is an independently written browser-based PDF annotation workspace. Its first-party `luxraj-annotation-core.js` module implements annotation creation, drawing, geometry, hit-testing, movement, history, and annotation-state serialization.
 
-The surrounding application currently uses PDF.js to read and render input PDFs and pdf-lib to write annotated PDFs. Replacing those PDF-engine dependencies is a separate engineering project; see [LIBRARY-ROADMAP.md](LIBRARY-ROADMAP.md). The application and annotation core are being developed as an independent clean-room implementation.
+The repository now also contains `luxraj-pdf-engine.js`, an independently written PDF syntax and minimal PDF-writer foundation. It serializes common PDF values, parses a limited subset of PDF syntax, and creates small new PDFs from supplied page sizes and content operators. It is not yet a general-purpose reader and cannot preserve arbitrary existing PDF files.
+
+**The browser editor still uses PDF.js and pdf-lib for its current open/render/export workflow.** Removing those dependencies before our own reader, renderer, and source-preserving writer are complete would break the main workflow. The replacement work is being done incrementally; see [LIBRARY-ROADMAP.md](LIBRARY-ROADMAP.md). No PDF.js or pdf-lib implementation source has been copied into the first-party engine.
 
 ## Run locally
 
-The app uses JavaScript modules and currently loads PDF.js and pdf-lib from public CDNs. Do not open `index.html` directly from the filesystem; serve the folder with a local web server:
+The app uses JavaScript modules and currently loads its PDF reader/writer from public CDNs. Serve the folder with a local web server:
 
 ```bash
 python3 -m http.server 8000
@@ -16,28 +18,33 @@ Then open `http://localhost:8000` in your browser.
 
 ## Privacy
 
-PDF files are processed in the browser. The application does not intentionally upload your document to a Luxraj server. The current PDF reader/renderer and PDF writer are fetched from public CDNs. The first-party annotation core itself runs locally and does not depend on those libraries.
+PDF files are processed in the browser. The application does not intentionally upload your document to a Luxraj server. The current PDF renderer and writer are fetched from public CDNs. The first-party annotation core and PDF-engine foundation run locally and have no third-party runtime dependencies.
 
 ## Current scope
 
-Standard, unrotated PDF pages are the primary target for accurate annotation positioning; rotated pages and complex PDF form workflows need additional testing. Export currently preserves the original PDF page content through the external PDF writer. The first-party annotation library is tested independently with Node's built-in test runner.
+The current app preserves original page content on export by using an external PDF writer. The first-party writer currently creates new basic PDF files only; it does not edit existing files. Complex and rotated pages, forms, encryption, unusual fonts, image decoding, and broad PDF compatibility require further work and testing.
 
-## First-party annotation library
+## First-party modules
 
-`luxraj-annotation-core.js` exports:
+`luxraj-annotation-core.js` includes:
 
-- `createAnnotation` and `normalizeHexColor`
-- `annotationBounds` and `findAnnotationAt`
-- `translateAnnotation`
-- `drawAnnotation` and `renderAnnotationLayer`
-- `AnnotationHistory`
-- `serializeAnnotationState` and `parseAnnotationState`
+- Annotation creation and color validation
+- Geometry, bounds, hit-testing, canvas drawing, and movement
+- Undo/redo history
+- Annotation-state serialization and validation
 
-The public APIs are dependency-free ES modules, so they can be reused internally by other Luxraj components without importing the page UI.
+`luxraj-pdf-engine.js` includes:
+
+- PDF value types for names, references, literal strings, and hex strings
+- Serialization of common PDF values and dictionaries
+- Parsing of a limited PDF syntax subset
+- A minimal writer for creating new PDF documents from supplied content streams
+
+These are independent ES modules and can be tested without the browser UI or external PDF libraries.
 
 ## Tests
 
-Requires Node.js 20 or another version that supports `node:test`:
+Requires Node.js 20 or another version with the built-in test runner:
 
 ```bash
 npm test
@@ -47,18 +54,19 @@ npm test
 
 ```text
 index.html                     Browser interface
-app.js                         Browser UI and PDF workflow
+app.js                         Browser UI and existing PDF workflow
 luxraj-annotation-core.js      First-party annotation library
+luxraj-pdf-engine.js           First-party PDF syntax and minimal writer
 styles.css                     Application styles
-tests/annotation-core.test.mjs Automated tests
+tests/                         Automated tests for first-party modules
 LICENSE                        All Rights Reserved for Luxraj-owned original work
-THIRD-PARTY-NOTICES.md         Notices for external PDF libraries
+THIRD-PARTY-NOTICES.md         Notices for external PDF libraries still in use
 LIBRARY-ROADMAP.md             Plan for replacing external PDF-engine dependencies
 ```
 
 ## Ownership and license
 
-Original materials owned by Luxraj Editor are marked **All Rights Reserved** in [LICENSE](LICENSE). The public source can be read or downloaded for inspection and reference, but that is not permission to reuse, modify, redistribute, or deploy Luxraj-owned source. Third-party dependencies remain governed by their own licenses; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+Original materials owned by Luxraj Editor are marked **All Rights Reserved** in [LICENSE](LICENSE). Third-party dependencies remain governed by their own licenses; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## GitHub Pages
 
