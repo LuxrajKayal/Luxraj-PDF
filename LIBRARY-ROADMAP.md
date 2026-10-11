@@ -1,6 +1,6 @@
 # Luxraj PDF Engine — Development Roadmap
 
-Build the PDF reader, renderer, and writer incrementally. A feature is not a replacement for a third-party library until it passes regression tests and works across a representative collection of real PDFs.
+Build the PDF reader, renderer, and writer incrementally. A feature is not a complete PDF implementation until it passes regression tests and works across a representative collection of real PDFs.
 
 ## v0.1 — Annotation core (implemented)
 
@@ -32,35 +32,31 @@ File: `luxraj-pdf-engine.js`
 ## v0.5 — Incremental annotation export (implemented for a limited subset)
 
 - Append annotation content while preserving original source bytes and existing page content streams
-- Register a dedicated Helvetica resource for added text
-- Isolate annotation drawing from transformations left by original page content
 - Use a compatibility writer for documents the first-party writer cannot safely process
 
 ## v0.6 — First-party page renderer (foundation implemented)
 
 File: `luxraj-pdf-renderer.js`
 
-- Canvas rendering for common path, fill, stroke, color, and transform operators
-- Basic text display using standard font names and text matrices
+- Canvas rendering for common path, fill, stroke, color, transform, and basic text operators
+- Initial ToUnicode CMap text decoding
+- Basic image XObjects, opacity, and simple axial/radial patterns
 - ASCIIHexDecode and FlateDecode streams without predictors
-- Automated tests for paths, text, page sizing, and unsupported operators
+- Automated tests for paths, text, page sizing, and compressed page content
 
-Next work: implement Form and Image XObjects, more graphics-state operators and clipping, wider text/font handling, predictors and more stream filters; add a fixture corpus from real documents including browser-printed course PDFs. Extend PDF file parsing for xref streams, compressed object streams, and indirect stream lengths.
+## v0.7 — Remove PDF.js (completed in this development branch)
 
-## v0.7 — Renderer integration and compatibility reduction (in progress)
+The application no longer imports or falls back to PDF.js. It only opens documents that the first-party reader and renderer can process. Unsupported PDFs are reported as unsupported instead of being rendered by an external fallback.
 
-The app now tries the first-party reader and renderer first for documents within the supported subset. If a document uses an unsupported structure or page operator, it falls back to compatibility rendering so the user does not silently lose page content.
+Next: improve coverage through real-document fixtures, especially xref streams, object streams, stream predictors, images and Form XObjects, fonts, clipping, and graphics states. Keep the limitation visible until those cases work.
 
-Next: expand coverage until fallback is rare for the project's target PDFs. Compare each rendered page against established readers and retain regression fixtures for defects.
+## v0.8 — Reduce export dependency (in progress)
 
-## v1.0 — Remove external PDF-engine dependencies (future target)
-
-Remove the rendering library only after the first-party parser and renderer pass broad fixture-based validation, including the PDFs the project owner actually uses. Remove the compatibility writer separately after the first-party writer supports those documents. Do not remove a dependency merely because a basic sample PDF renders.
+pdf-lib remains for compatibility export. Remove it only after the first-party writer safely supports the project's target documents and passes regression checks.
 
 ## Quality rules
 
 - Write first-party code independently; do not copy implementation code from PDF.js or pdf-lib.
 - Keep the PDF engine separate from the browser UI.
 - Add a regression test for every fixed defect.
-- Keep third-party notices accurate while the app still uses external libraries.
 - Never claim general PDF compatibility based on a limited test set.
