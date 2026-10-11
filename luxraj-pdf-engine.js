@@ -363,3 +363,149 @@ export function createPdf({ pages = [] } = {}) {
   pieces.push(toBytes(xref), toBytes(trailer));
   return concatBytes(pieces);
 }
+
+
+function pdfRgb(hex, pale = false) {
+  if (typeof hex !== 'string' || !/^#?(?:[\\da-f]{3}|[\\da-f]{6})$/i.test(hex.trim())) {
+    throw new TypeError('Annotation color must be a 3- or 6-digit hex value.');
+  }
+  let raw = hex.trim().replace(/^#/, '');
+  if (raw.length === 3) raw = [...raw].map((char) => char + char).join('');
+  const channels = [0, 2, 4].map((offset) => parseInt(raw.slice(offset, offset + 2), 16) / 255);
+  const values = pale ? channels.map((channel) => channel * 0.22 + 0.78) : channels;
+  return values.map(formatNumber).join(' ');
+}
+
+function contentPoint(point, context) {
+  if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+    throw new TypeError('Annotation points must have finite x and y coordinates.');
+  }
+  return {
+    x: point.x * context.scaleX,
+    y: context.pageHeight - point.y * context.scaleY,
+  };
+}
+
+function pdfTextLiteral(text) {
+  const value = String(text ?? '');
+  // The initial writer uses the built-in Helvetica/WinAnsi font, so avoid silently
+  // corrupting characters that require a Unicode font or ToUnicode map.
+  if (/[^\x20-\x7E]/.test(value)) {
+    throw new RangeError('The first-party PDF writer currently supports ASCII annotation text only.');
+  }
+  return serializePdfValue(new PdfString(value));
+}
+
+/**
+ * Convert our annotation model for one page into a first-party PDF content stream.
+ * Annotation point coordinates use a top-left origin; PDF uses a bottom-left origin.
+ * Options: pageIndex, pageWidth, pageHeight, canvasWidth, canvasHeight.
+ */
+export function annotationsToPdfContent(annotations, options = {}) {
+  if (!Array.isArray(annotations)) throw new TypeError('annotations must be an array.');
+  const pageIndex = options.pageIndex ?? 0;
+  const pageWidth = positivePageNumber(options.pageWidth, 'Page width');
+  const pageHeight = positivePageNumber(options.pageHeight, 'Page height');
+  const canvasWidth = positivePageNumber(options.canvasWidth ?? pageWidth, 'Canvas width');
+  const canvasHeight = positivePageNumber(options.canvasHeight ?? pageHeight, 'Canvas height');
+  const context = {
+    pageHeight,
+    scaleX: pageWidth / canvasWidth,
+    scaleY: pageHeight / canvasHeight,
+  };
+  const commands = [];
+
+  for (const annotation of annotations) {
+    if (annotation.pageIndex !== pageIndex) continue;
+    const points = Array.isArray(annotation.points) ? annotation.points : [];
+    if (!points.length) continue;
+    const lineWidth = Math.max(0.1, Number(annotation.thickness ?? 1) * (context.scaleX + context.scaleY) / 2);
+    if (!Number.isFinite(lineWidth)) throw new TypeError('Annotation thickness must be finite.');
+    const highlight = annotation.type === 'highlight';
+    const strokeColor = pdfRgb(annotation.color ?? '#2563eb', highlight);
+    const fillColor = pdfRgb(annotation.color ?? '#2563eb', highlight);
+    commands.push('q', `${strokeColor} RG`, `${fillColor} rg`, `${formatNumber(lineWidth * (highlight ? 4 : 1))} w`, '1 J', '1 j');
+
+    if (annotation.type === 'pen' || highlight) {
+      if (points.length > 1) {
+        const first = contentPoint(points[0], context);
+        commands.push(`${formatNumber(first.x)} ${formatNumber(first.y)} m`);
+        for (let i = 1; i < points.length; i += 1) {
+          const point = contentPoint(points[i], context);
+          commands.push(`${formatNumber(point.x)} ${formatNumber(point.y)} l`);
+        }
+        commands.push('S');
+      } else {
+        const point = contentPoint(points[0], context);
+        commands.push(`${formatNumber(point.x)} ${formatNumber(point.y)} m ${formatNumber(point.x)} ${formatNumber(point.y)} l S`);
+      }
+    } else if (points.length >= 2) {
+      const a = points[0], b = points[1];
+      const left = Math.min(a.x, b.x) * context.scaleX;
+      const right = Math.max(a.x, b.x) * context.scaleX;
+      const top = Math.min(a.y, b.y) * context.scaleY;
+      const bottom = Math.max(a.y, b.y) * context.scaleY;
+      const width = right - left;
+      const height = bottom - top;
+      const bottomY = pageHeight - bottom;
+      if (annotation.type === 'rect') {
+        commands.push(`${formatNumber(left)} ${formatNumber(bottomY)} ${formatNumber(width)} ${formatNumber(height)} re`);
+        commands.push(annotation.fill ? 'B' : 'S');
+      } else if (annotation.type === 'ellipse') {
+        const k = 0.5522847498;
+        const cx = left + width / 2, cy = bottomY + height / 2;
+        const rx = width / 2, ry = height / 2;
+        commands.push(
+          `${formatNumber(cx + rx)} ${formatNumber(cy)} m`,
+          `${formatNumber(cx + rx)} ${formatNumber(cy + k * ry)} ${formatNumber(cx + k * rx)} ${formatNumber(cy + ry)} ${formatNumber(cx)} ${formatNumber(cy + ry)} c`,
+          `${formatNumber(cx - k * rx)} ${formatNumber(cy + ry)} ${formatNumber(cx - rx)} ${formatNumber(cy + k * ry)} ${formatNumber(cx - rx)} ${formatNumber(cy)} c`,
+          `${formatNumber(cx - rx)} ${formatNumber(cy - k * ry)} ${formatNumber(cx - k * rx)} ${formatNumber(cy - ry)} ${formatNumber(cx)} ${formatNumber(cy - ry)} c`,
+          `${formatNumber(cx + k * rx)} ${formatNumber(cy - ry)} ${formatNumber(cx + rx)} ${formatNumber(cy - k * ry)} ${formatNumber(cx + rx)} ${formatNumber(cy)} c`,
+          annotation.fill ? 'B' : 'S',
+        );
+      } else if (annotation.type === 'line' || annotation.type === 'arrow') {
+        const start = contentPoint(a, context), end = contentPoint(b, context);
+        commands.push(`${formatNumber(start.x)} ${formatNumber(start.y)} m ${formatNumber(end.x)} ${formatNumber(end.y)} l S`);
+        if (annotation.type === 'arrow') {
+          const angle = Math.atan2(end.y - start.y, end.x - start.x);
+          const size = Math.max(9, Number(annotation.thickness ?? 1) * 3.2) * (context.scaleX + context.scaleY) / 2;
+          const p1 = { x: end.x - size * Math.cos(angle - Math.PI / 6), y: end.y - size * Math.sin(angle - Math.PI / 6) };
+          const p2 = { x: end.x - size * Math.cos(angle + Math.PI / 6), y: end.y - size * Math.sin(angle + Math.PI / 6) };
+          commands.push(`${formatNumber(end.x)} ${formatNumber(end.y)} m ${formatNumber(p1.x)} ${formatNumber(p1.y)} l S`);
+          commands.push(`${formatNumber(end.x)} ${formatNumber(end.y)} m ${formatNumber(p2.x)} ${formatNumber(p2.y)} l S`);
+        }
+      }
+    } else if (annotation.type === 'text') {
+      const point = contentPoint(points[0], context);
+      const size = positivePageNumber(Number(annotation.fontSize ?? 18), 'Font size');
+      commands.push(`BT /F1 ${formatNumber(size)} Tf ${formatNumber(point.x)} ${formatNumber(point.y)} Td ${pdfTextLiteral(annotation.text ?? '')} Tj ET`);
+    }
+    commands.push('Q');
+  }
+  return commands.join('\n') + (commands.length ? '\n' : '');
+}
+
+/**
+ * Create a brand-new PDF whose pages contain the supplied annotations.
+ * This is not a source-preserving editor yet: it does not include any background
+ * content from an input PDF.
+ */
+export function createAnnotationPdf({ pages = [], annotations = [] } = {}) {
+  if (!Array.isArray(pages)) throw new TypeError('pages must be an array.');
+  if (!Array.isArray(annotations)) throw new TypeError('annotations must be an array.');
+  const outputPages = pages.map((page, index) => {
+    const pageIndex = page.index ?? index;
+    return {
+      width: page.width,
+      height: page.height,
+      content: annotationsToPdfContent(annotations, {
+        pageIndex,
+        pageWidth: page.width,
+        pageHeight: page.height,
+        canvasWidth: page.canvasWidth ?? page.width,
+        canvasHeight: page.canvasHeight ?? page.height,
+      }),
+    };
+  });
+  return createPdf({ pages: outputPages });
+}
