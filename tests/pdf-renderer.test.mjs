@@ -65,6 +65,7 @@ class RecordingCanvasContext {
   fillText(...args) { this.record('fillText', ...args); }
   strokeText(...args) { this.record('strokeText', ...args); }
   setLineDash(...args) { this.record('setLineDash', ...args); }
+  drawImage(...args) { this.record('drawImage', ...args); }
   measureText(text) { return { width: String(text).length * 0.5 }; }
 }
 
@@ -128,7 +129,7 @@ test('handles an unmatched Q safely and reports unsupported image XObjects', asy
   const result = await renderPdfPage(context, document, 0);
 
   assert.ok(result.warnings.some((warning) => warning.includes('unmatched Q')));
-  assert.ok(result.warnings.some((warning) => warning.includes('Image and Form XObjects')));
+  assert.ok(result.warnings.some((warning) => warning.includes('unresolved XObject /Im0')));
   assert.ok(context.calls.some((call) => call.name === 'rect'));
 });
 
