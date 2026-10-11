@@ -24,29 +24,25 @@ File: `luxraj-pdf-engine.js`
 
 - Convert pen, highlight, rectangle, ellipse, line, arrow, and ASCII text into PDF graphics operators
 - Create new PDF files containing annotations on blank pages
-- Current limitations: no original-page background is preserved in this mode; no full transparency model or embedded Unicode font support yet
+- Current limitations: no original-page background is preserved; no real transparency model or embedded Unicode font support yet
 
 ## v0.4 — Existing-file object reader (partial foundation implemented)
 
 - Reads classic xref tables, indirect objects, direct-length streams, trailer/root references, page trees, media boxes, and page content streams
 - Can read back the simple PDFs produced by our own writer
-- Not yet implemented: xref streams, object streams, indirect stream lengths, encrypted files, and general stream-filter decoding. Unsupported layouts are rejected.
+- Not yet implemented: xref streams, object streams, indirect stream lengths, encrypted files, and general stream-filter decoding. Unsupported layouts fail with an error rather than being advertised as supported.
 
-## v0.5 — Source-preserving incremental writer (implemented, limited)
+## v0.5 — Source-preserving writer (next)
 
-- Append a new annotation content stream to supported existing PDFs and update the page dictionary through an incremental xref section
-- Preserve original input bytes rather than rewriting the existing objects
-- Tests verify original page content streams remain unchanged and the resulting page tree/content references can be read back
-- Current limitations: the source PDF must be parseable by the first-party reader; rotated/cropped page transforms, encryption, complex structure, and some annotation types need additional handling
-- The live app export path currently uses a transparent PNG overlay embedded by pdf-lib instead, to ensure the exported output matches the live coordinate space while this engine matures
+Update supported page dictionaries and content streams while retaining existing objects. Validate cross-reference offsets and ensure unmodified source page content remains intact. Add fixtures from common real-world PDFs before using it in the editor.
 
-## v0.6 — First-party page renderer (next)
+## v0.6 — Page renderer (next)
 
-Implement a tested PDF drawing-operator subset and build up text, paths, images, fonts, transparency, transforms, clipping, and stream filters. Compare output with trusted readers using a fixture corpus. This is a major piece of work and the main blocker to removing PDF.js.
+Implement a tested PDF drawing-operator subset and build up text, paths, images, fonts, transparency, transforms, clipping, and stream filters. Compare output with trusted readers using a fixture corpus. This is a major piece of work.
 
 ## v1.0 — Remove external PDF-engine dependencies (future target)
 
-The app currently uses PDF.js to read/render pages and dynamically loads pdf-lib on export to embed a transparent annotation PNG over each target page. Only after our own reader, renderer, source-preserving writer, and PNG image embedding pass fixture-based validation should the app stop loading those libraries. Their notices must remain accurate until they are no longer used.
+Only after our own reader, renderer, and source-preserving writer pass fixture-based validation should the browser app stop loading PDF.js and pdf-lib. Until that happens, the app still uses those separately licensed libraries for its current full document workflow, and their notices must remain accurate.
 
 ## Quality and ownership rules
 
