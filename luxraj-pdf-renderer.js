@@ -778,7 +778,7 @@ function createShadingPattern(state, name) {
   return gradient;
 }
 
-function renderOperator(state, operator, args) {
+async function renderOperator(state, operator, args) {
   const context = state.context;
   const nums = (count) => {
     if (args.length < count || args.slice(-count).some((arg) => arg.type !== 'number')) {
