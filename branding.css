@@ -1,0 +1,10 @@
+/* Luxraj personal branding and copyright footer */
+body { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+.app-shell { flex: 1; height: auto; min-height: 0; }
+.site-copyright { flex: 0 0 28px; display:flex; align-items:center; justify-content:center; padding:4px 12px; background:#101827; color:#dbe5f5; border-top:1px solid #26354d; font-size:11px; letter-spacing:.2px; text-align:center; }
+.brand-avatar { display:block; width:34px; height:34px; object-fit:cover; border-radius:50%; border:2px solid #dbeafe; box-shadow:0 3px 10px #2563eb30; }
+@media (max-width:760px) {
+  .app-shell { height:auto; grid-template-rows:58px minmax(0,1fr); }
+  .site-copyright { flex-basis:26px; font-size:10px; }
+  .brand-avatar { width:30px; height:30px; }
+}
