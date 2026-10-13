@@ -6,12 +6,14 @@
   <meta name="theme-color" content="#101827">
   <meta name="description" content="Luxraj Editor — a browser-based PDF annotation workspace.">
   <title>Luxraj Editor</title>
+  <link rel="icon" href="luxraj-icon.ico" sizes="any">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="branding.css">
 </head>
 <body>
   <header class="topbar">
     <a class="brand" href="./" aria-label="Luxraj Editor home">
-      <span class="brand-mark">L</span>
+      <img class="brand-avatar" src="luxraj-avatar.png" alt="" width="34" height="34">
       <span class="brand-name">Luxraj <b>Editor</b></span>
     </a>
     <div class="document-name" id="document-name">No document opened</div>
@@ -37,29 +39,16 @@
       <button class="tool-button" data-tool="eraser" type="button" title="Erase annotation (E)"><span class="tool-icon">⌫</span><span>Eraser</span></button>
       <div class="rail-bottom-note">Your PDF stays<br>in this browser.</div>
     </aside>
-
     <section class="workspace" aria-label="PDF workspace">
       <div class="controls-bar">
-        <div class="control-group color-control">
-          <label for="stroke-color">Color</label>
-          <input id="stroke-color" type="color" value="#2563eb" aria-label="Annotation color">
-          <input id="color-hex" type="text" value="#2563eb" maxlength="7" spellcheck="false" aria-label="Color hex code">
-        </div>
-        <div class="control-group thickness-control">
-          <label for="thickness">Thickness</label>
-          <input id="thickness" type="range" min="1" max="16" value="3">
-          <span id="thickness-value">3</span>
-        </div>
-        <label class="fill-control"><input type="checkbox" id="fill-shapes"> Fill shapes</label>
-        <div class="controls-spacer"></div>
-        <span class="page-status" id="page-status">No pages</span>
+        <div class="control-group color-control"><label for="stroke-color">Color</label><input id="stroke-color" type="color" value="#2563eb" aria-label="Annotation color"><input id="color-hex" type="text" value="#2563eb" maxlength="7" spellcheck="false" aria-label="Color hex code"></div>
+        <div class="control-group thickness-control"><label for="thickness">Thickness</label><input id="thickness" type="range" min="1" max="16" value="3"><span id="thickness-value">3</span></div>
+        <label class="fill-control"><input type="checkbox" id="fill-shapes"> Fill shapes</label><div class="controls-spacer"></div><span class="page-status" id="page-status">No pages</span>
       </div>
-
       <div class="canvas-scroll" id="canvas-scroll">
         <section id="welcome-panel" class="welcome-panel">
           <div class="welcome-art" aria-hidden="true"><div class="paper-art"><span></span><span></span><span></span><i>PDF</i></div></div>
-          <p class="eyebrow">YOUR DOCUMENT WORKSPACE</p>
-          <h1>Make your mark.</h1>
+          <p class="eyebrow">YOUR DOCUMENT WORKSPACE</p><h1>Make your mark.</h1>
           <p class="welcome-copy">Open a PDF to start drawing, highlighting, adding shapes, and making notes.</p>
           <button id="open-pdf-btn" class="primary-button large-button" type="button">Open a PDF <span aria-hidden="true">↗</span></button>
           <p class="privacy-note"><span class="privacy-dot"></span> Documents are processed locally in your browser.</p>
@@ -69,35 +58,15 @@
       <input id="file-input" type="file" accept="application/pdf,.pdf" hidden>
       <div class="drop-overlay" id="drop-overlay" hidden><div><strong>Drop your PDF here</strong><span>Release to open the document</span></div></div>
     </section>
-
     <aside class="properties-panel" aria-label="Document and annotation details">
       <div class="panel-heading">WORKSPACE</div>
-      <div class="property-section">
-        <div class="section-title">Document</div>
-        <div class="document-card">
-          <div class="file-icon">PDF</div>
-          <div class="file-meta"><strong id="property-doc-name">No PDF loaded</strong><span id="property-doc-pages">Open a document to begin</span></div>
-        </div>
-        <button id="change-pdf-btn" class="secondary-button full-width" type="button">Open another PDF</button>
-      </div>
-      <div class="property-section">
-        <div class="section-title">Annotations <span class="count-pill" id="annotation-count">0</span></div>
-        <div class="annotation-list-empty" id="annotation-empty">Your annotations will appear here.</div>
-        <div id="annotation-list" class="annotation-list"></div>
-        <button id="delete-selected-btn" class="danger-button full-width" type="button" disabled>Delete selected</button>
-      </div>
+      <div class="property-section"><div class="section-title">Document</div><div class="document-card"><div class="file-icon">PDF</div><div class="file-meta"><strong id="property-doc-name">No PDF loaded</strong><span id="property-doc-pages">Open a document to begin</span></div></div><button id="change-pdf-btn" class="secondary-button full-width" type="button">Open another PDF</button></div>
+      <div class="property-section"><div class="section-title">Annotations <span class="count-pill" id="annotation-count">0</span></div><div class="annotation-list-empty" id="annotation-empty">Your annotations will appear here.</div><div id="annotation-list" class="annotation-list"></div><button id="delete-selected-btn" class="danger-button full-width" type="button" disabled>Delete selected</button></div>
       <div class="panel-footer"><span class="status-dot"></span><span>Private local workspace</span><button id="about-btn" type="button" class="text-button">About</button></div>
     </aside>
   </main>
-
-  <dialog id="about-dialog" class="about-dialog">
-    <div class="dialog-top"><span class="brand-mark small-mark">L</span><button id="close-about-btn" class="dialog-close" type="button" aria-label="Close">×</button></div>
-    <p class="eyebrow">A TOOL BY LUXRAJ</p>
-    <h2>Luxraj Editor</h2>
-    <p>A browser-based PDF annotation workspace designed and developed as an independent software project.</p>
-    <p class="dialog-muted">PDF rendering and writing use the separately licensed PDF.js and pdf-lib libraries. See the project notices for details.</p>
-    <button id="about-ok-btn" class="primary-button full-width" type="button">Back to editor</button>
-  </dialog>
+  <footer class="site-copyright">Copyright © by Subrata Kayal (Luxraj)</footer>
+  <dialog id="about-dialog" class="about-dialog"><div class="dialog-top"><span class="brand-mark small-mark">L</span><button id="close-about-btn" class="dialog-close" type="button" aria-label="Close">×</button></div><p class="eyebrow">A TOOL BY LUXRAJ</p><h2>Luxraj Editor</h2><p>A browser-based PDF annotation workspace designed and developed as an independent software project.</p><p class="dialog-muted">PDF rendering and writing use the separately licensed PDF.js and pdf-lib libraries. See the project notices for details.</p><button id="about-ok-btn" class="primary-button full-width" type="button">Back to editor</button></dialog>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script type="module" src="app.js"></script>
 </body>
